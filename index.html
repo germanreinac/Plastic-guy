@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Plastic Guy</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=DM+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one full-bleed stage. The guy owns the middle; controls sit in the corners and stay out of the way. */
+:root {
+  --bg: #ffffff;
+  --fg: #0b0b0b;
+  --mute: rgba(11, 11, 11, .5);
+  --line: rgba(11, 11, 11, .16);
+  --display: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif;
+  --mono: "DM Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --gl: max(16px, env(safe-area-inset-left, 0px));
+  --gr: max(16px, env(safe-area-inset-right, 0px));
+  padding: env(safe-area-inset-top, 0px) 0 env(safe-area-inset-bottom, 0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b0b0b; --fg: #f6f6f6;
+    --mute: rgba(246, 246, 246, .55); --line: rgba(246, 246, 246, .2);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0b0b0b; --fg: #f6f6f6;
+  --mute: rgba(246, 246, 246, .55); --line: rgba(246, 246, 246, .2);
+  color-scheme: dark;
+}
+
+html, body { height: 100%; margin: 0; }
+[hidden] { display: none !important; }
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 11px/1.4 var(--mono);
+  overflow: hidden;
+  padding-left: var(--gl);
+  padding-right: var(--gr);
+  -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#stage {
+  position: fixed; inset: 0;
+  width: 100%; height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: grab;
+}
+#stage.holding { cursor: grabbing; }
+#stage.ring { cursor: none; }
+
+.top {
+  position: fixed; inset: 0 0 auto 0;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: calc(14px + env(safe-area-inset-top, 0px)) var(--gr) 0 var(--gl);
+  pointer-events: none;
+}
+.top > * { pointer-events: auto; }
+.mark {
+  margin: 0;
+  font: 700 17px/1 var(--display);
+  letter-spacing: -.02em;
+}
+.actions { display: flex; gap: 6px; }
+
+button {
+  font: 500 11px/1 var(--mono);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--fg);
+  border-radius: 999px;
+  padding: 9px 13px;
+  cursor: pointer;
+}
+button[aria-pressed="true"], button[aria-expanded="true"], button[aria-checked="true"] {
+  background: var(--fg); color: var(--bg);
+}
+@media (hover: hover) { button:hover { background: var(--fg); color: var(--bg); } }
+:focus-visible { outline: 2px solid var(--fg); outline-offset: 3px; }
+
+.tools {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  border: 1px solid var(--fg);
+  border-radius: 999px;
+  background: var(--bg);
+  padding: 3px; gap: 2px;
+}
+.tools button { border-color: transparent; padding: 9px 16px; }
+
+#hint {
+  position: fixed; left: 0; right: 0;
+  bottom: calc(74px + env(safe-area-inset-bottom, 0px));
+  margin: 0; padding: 0 var(--gr) 0 var(--gl);
+  text-align: center;
+  color: var(--mute);
+  letter-spacing: .08em; text-transform: uppercase;
+  pointer-events: none;
+  transition: opacity .6s;
+}
+#hint.gone { opacity: 0; }
+
+#panel {
+  position: fixed;
+  top: calc(58px + env(safe-area-inset-top, 0px));
+  right: var(--gr);
+  width: min(236px, calc(100vw - 32px));
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--fg);
+  border-radius: 18px;
+  padding: 16px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.row { display: grid; grid-template-columns: 1fr auto; gap: 6px 8px; align-items: baseline; }
+.row label { letter-spacing: .08em; text-transform: uppercase; }
+.row output { color: var(--mute); font-variant-numeric: tabular-nums; }
+.row input { grid-column: 1 / -1; }
+.ends { grid-column: 1 / -1; display: flex; justify-content: space-between; color: var(--mute); font-size: 10px; }
+.switches { display: flex; gap: 6px; padding-top: 2px; }
+.switches button { flex: 1; }
+
+input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 18px; margin: 0;
+  background: transparent; cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track { height: 1px; background: var(--fg); }
+input[type="range"]::-moz-range-track { height: 1px; background: var(--fg); }
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 16px; height: 16px; margin-top: -8px;
+  border-radius: 50%; background: var(--fg); border: 0;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%; background: var(--fg); border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) { #hint { transition: none; } }
+</style>
+</head>
+<body>
+<canvas id="stage" aria-label="A putty figure lying on the ground. Drag to deform it."></canvas>
+
+<header class="top">
+  <h1 class="mark">plastic guy</h1>
+  <div class="actions">
+    <button id="tune-btn" type="button" aria-expanded="false" aria-controls="panel">Tune</button>
+    <button id="reset-btn" type="button">Reset</button>
+  </div>
+</header>
+
+<section id="panel" aria-label="Putty settings" hidden>
+  <div class="row">
+    <label for="soft">Softness</label><output id="soft-out" for="soft">50</output>
+    <input id="soft" type="range" min="0" max="100" value="50">
+    <div class="ends"><span>firm</span><span>gooey</span></div>
+  </div>
+  <div class="row">
+    <label for="mem">Spring back</label><output id="mem-out" for="mem">15</output>
+    <input id="mem" type="range" min="0" max="100" value="15">
+    <div class="ends"><span>clay</span><span>rubber</span></div>
+  </div>
+  <div class="row">
+    <label for="slide">Slide</label><output id="slide-out" for="slide">50</output>
+    <input id="slide" type="range" min="0" max="100" value="50">
+    <div class="ends"><span>sticky</span><span>ice</span></div>
+  </div>
+  <div class="row">
+    <label for="finger">Finger size</label><output id="finger-out" for="finger">40</output>
+    <input id="finger" type="range" min="0" max="100" value="40">
+    <div class="ends"><span>fingertip</span><span>whole palm</span></div>
+  </div>
+  <div class="switches">
+    <button id="mesh-btn" type="button" aria-pressed="false">Mesh</button>
+    <button id="invert-btn" type="button">Invert</button>
+  </div>
+</section>
+
+<p id="hint">Grab the guy. Pull, press, pinch.</p>
+
+<nav class="tools" role="radiogroup" aria-label="Tool">
+  <button type="button" role="radio" aria-checked="true" data-tool="pull" id="tool-pull">Pull</button>
+  <button type="button" role="radio" aria-checked="false" data-tool="press" id="tool-press">Press</button>
+  <button type="button" role="radio" aria-checked="false" data-tool="pinch" id="tool-pinch">Pinch</button>
+</nav>
+
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const cv = $('stage'), ctx = cv.getContext('2d');
+
+  // ---------- state ----------
+  let W = 0, H = 0, DPR = 1, S = 1, cx = 0, cy = 0;
+  let N = 0, x, y, px, py, fl, hx, hy;        // particles (fl = how flattened: >1 pressed thin, <1 bunched up)
+  let E = 0, ea, eb, er, er0;                 // springs (er = current plastic rest length)
+  let T = 0, ta, tb, tc, tA;                  // triangles, rest area (putty volume is conserved)
+  let loops = [], face = null;
+  let resetT = 0, lastTouch = performance.now(), nextBlink = 2500, blinkUntil = 0;
+  let fg = '#000', bg = '#fff';
+  const P = { soft: .5, mem: .15, slide: .5, finger: .4, mesh: false };
+  let tool = 'pull';
+  const ptrs = new Map();
+  let hover = null;
+
+  const ITER = 5, YIELD = .07, FMAX = 1.75, FMIN = .6, RMIN = .28, RMAX = 3.6;
+
+  // ---------- the guy, as a signed distance field in unit space (about 1 unit tall) ----------
+  const seg = (x, y, ax, ay, bx, by, r) => {
+    const vx = bx - ax, vy = by - ay, wx = x - ax, wy = y - ay;
+    let t = (wx * vx + wy * vy) / (vx * vx + vy * vy);
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    return Math.hypot(wx - vx * t, wy - vy * t) - r;
+  };
+  const cir = (x, y, ax, ay, r) => Math.hypot(x - ax, y - ay) - r;
+  const smin = (a, b, k) => { const h = Math.max(k - Math.abs(a - b), 0) / k; return Math.min(a, b) - h * h * k * .25; };
+  function sdf(x, y) {
+    const K = .045;
+    let d = cir(x, y, 0, -.345, .105);                         // head
+    d = smin(d, seg(x, y, 0, -.17, 0, .06, .1), K);            // chest
+    d = smin(d, cir(x, y, 0, .035, .115), K);                  // belly
+    d = smin(d, seg(x, y, -.07, -.17, -.33, -.25, .043), K);   // arm, flung up
+    d = smin(d, cir(x, y, -.35, -.258, .055), K);
+    d = smin(d, seg(x, y, .07, -.17, .34, -.06, .043), K);     // arm, flopped out
+    d = smin(d, cir(x, y, .36, -.05, .055), K);
+    d = smin(d, seg(x, y, -.05, .09, -.15, .4, .055), K);      // legs
+    d = smin(d, cir(x, y, -.165, .42, .066), K);
+    d = smin(d, seg(x, y, .05, .09, .19, .37, .055), K);
+    d = smin(d, cir(x, y, .205, .385, .066), K);
+    return d;
+  }
+
+  // ---------- mesh ----------
+  function build() {
+    const h = .018, rh = h * Math.sqrt(3) / 2;
+    const cols = Math.ceil(1.1 / h), rows = Math.ceil(1.1 / rh);
+    const id = new Int32Array(cols * rows).fill(-1);
+    let ux = [], uy = [];
+    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+      const X = -.55 + (i + (j & 1) * .5) * h, Y = -.55 + j * rh;
+      if (sdf(X, Y) < -.15 * h) { id[j * cols + i] = ux.length; ux.push(X); uy.push(Y); }
+    }
+    const g = (j, i) => (i < 0 || j < 0 || i >= cols || j >= rows) ? -1 : id[j * cols + i];
+    let tris = [];
+    const add = (a, b, c) => {
+      if (a < 0 || b < 0 || c < 0) return;
+      const A = (ux[b] - ux[a]) * (uy[c] - uy[a]) - (ux[c] - ux[a]) * (uy[b] - uy[a]);
+      if (A < 0) tris.push(a, c, b); else tris.push(a, b, c);
+    };
+    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
+      const a = g(j, i); if (a < 0) continue;
+      if (j & 1) { add(a, g(j, i + 1), g(j + 1, i + 1)); add(a, g(j + 1, i + 1), g(j + 1, i)); }
+      else { add(a, g(j, i + 1), g(j + 1, i)); add(a, g(j + 1, i), g(j + 1, i - 1)); }
+    }
+    // drop loose particles
+    const map = new Int32Array(ux.length).fill(-1); let n = 0;
+    for (const v of tris) if (map[v] < 0) map[v] = n++;
+    const nx = new Array(n), ny = new Array(n);
+    for (let i = 0; i < ux.length; i++) if (map[i] >= 0) { nx[map[i]] = ux[i]; ny[map[i]] = uy[i]; }
+    ux = nx; uy = ny; tris = tris.map(v => map[v]); N = n;
+
+    // edges, and the directed boundary
+    const dir = new Set(), und = new Set();
+    for (let t = 0; t < tris.length; t += 3) for (let k = 0; k < 3; k++) {
+      const a = tris[t + k], b = tris[t + (k + 1) % 3];
+      dir.add(a * N + b); und.add(a < b ? a * N + b : b * N + a);
+    }
+    const out = new Map();
+    for (const key of dir) {
+      const a = Math.floor(key / N), b = key % N;
+      if (!dir.has(b * N + a)) { if (!out.has(a)) out.set(a, []); out.get(a).push(b); }
+    }
+    // pull the rim onto the true outline so the silhouette starts smooth
+    for (const v of out.keys()) for (let k = 0; k < 3; k++) {
+      const e = 1e-4, d = sdf(ux[v], uy[v]);
+      let gx = sdf(ux[v] + e, uy[v]) - sdf(ux[v] - e, uy[v]), gy = sdf(ux[v], uy[v] + e) - sdf(ux[v], uy[v] - e);
+      const gl = Math.hypot(gx, gy) || 1;
+      ux[v] -= gx / gl * d; uy[v] -= gy / gl * d;
+    }
+    loops = [];
+    while (out.size) {
+      const start = out.keys().next().value, L = [];
+      let cur = start;
+      do {
+        L.push(cur);
+        const l = out.get(cur), nxt = l.pop();
+        if (!l.length) out.delete(cur);
+        cur = nxt;
+      } while (cur !== start && out.has(cur));
+      if (L.length > 2) loops.push(L);
+    }
+
+    // to screen
+    x = new Float32Array(N); y = new Float32Array(N); px = new Float32Array(N); py = new Float32Array(N);
+    fl = new Float32Array(N).fill(1); hx = Float32Array.from(ux); hy = Float32Array.from(uy);
+    for (let i = 0; i < N; i++) { px[i] = x[i] = cx + ux[i] * S; py[i] = y[i] = cy + uy[i] * S; }
+    E = und.size; ea = new Uint16Array(E); eb = new Uint16Array(E); er = new Float32Array(E); er0 = new Float32Array(E);
+    let k = 0;
+    for (const key of und) {
+      const a = Math.floor(key / N), b = key % N;
+      ea[k] = a; eb[k] = b; er0[k] = er[k] = Math.hypot(x[b] - x[a], y[b] - y[a]); k++;
+    }
+    T = tris.length / 3; ta = new Uint16Array(T); tb = new Uint16Array(T); tc = new Uint16Array(T); tA = new Float32Array(T);
+    for (let t = 0; t < T; t++) {
+      const a = ta[t] = tris[t * 3], b = tb[t] = tris[t * 3 + 1], c = tc[t] = tris[t * 3 + 2];
+      tA[t] = .5 * ((x[b] - x[a]) * (y[c] - y[a]) - (x[c] - x[a]) * (y[b] - y[a]));
+    }
+    // face, pinned into the mesh so it deforms with the head
+    const attach = (qx, qy) => {
+      for (let t = 0; t < T; t++) {
+        const a = ta[t], b = tb[t], c = tc[t];
+        const d = (hy[b] - hy[c]) * (hx[a] - hx[c]) + (hx[c] - hx[b]) * (hy[a] - hy[c]);
+        const wa = ((hy[b] - hy[c]) * (qx - hx[c]) + (hx[c] - hx[b]) * (qy - hy[c])) / d;
+        const wb = ((hy[c] - hy[a]) * (qx - hx[c]) + (hx[a] - hx[c]) * (qy - hy[c])) / d;
+        if (wa >= -1e-6 && wb >= -1e-6 && wa + wb <= 1 + 1e-6) return { a, b, c, wa, wb, wc: 1 - wa - wb };
+      }
+      return { a: 0, b: 0, c: 0, wa: 1, wb: 0, wc: 0 };
+    };
+    face = {
+      el: attach(-.04, -.36), er: attach(.04, -.36),
+      ml: attach(-.03, -.31), mr: attach(.03, -.31), mm: attach(0, -.297),
+    };
+    resetT = 0;
+  }
+
+  // ---------- physics ----------
+  const fingerR = () => S * (.03 + .13 * P.finger);
+
+  function step() {
+    const s = P.slide, damp = .997 - .12 * (1 - s) * (1 - s);
+    const maxv = S * .06;
+    for (let i = 0; i < N; i++) {
+      let vx = (x[i] - px[i]) * damp, vy = (y[i] - py[i]) * damp;
+      const v2 = vx * vx + vy * vy;
+      if (v2 > maxv * maxv) { const k = maxv / Math.sqrt(v2); vx *= k; vy *= k; }
+      px[i] = x[i]; py[i] = y[i]; x[i] += vx; y[i] += vy;
+    }
+
+    // press flattens the putty (it spreads), pinch bunches it up
+    const R = fingerR(), R2 = R * R;
+    for (const p of ptrs.values()) {
+      if (p.tool === 'pull') continue;
+      const press = p.tool === 'press';
+      for (let i = 0; i < N; i++) {
+        const dx = x[i] - p.x, dy = y[i] - p.y, d2 = dx * dx + dy * dy;
+        if (d2 > R2) continue;
+        const w = 1 - d2 / R2, a = .012 * w * w;
+        fl[i] = press ? Math.min(FMAX, fl[i] + a) : Math.max(FMIN, fl[i] - a);
+      }
+    }
+
+    const kE = 1 - .88 * P.soft, kA = .75 - .35 * P.soft;
+    const lo = 4, hiX = W - 4, hiY = H - 4;
+    for (let it = 0; it < ITER; it++) {
+      const fwd = !(it & 1);
+      for (let n = 0; n < E; n++) {
+        const e = fwd ? n : E - 1 - n, a = ea[e], b = eb[e];
+        const dx = x[b] - x[a], dy = y[b] - y[a], d = Math.sqrt(dx * dx + dy * dy);
+        if (d < 1e-6) continue;
+        const c = (d - er[e] * (fl[a] + fl[b]) * .5) / d * .5 * kE;
+        x[a] += dx * c; y[a] += dy * c; x[b] -= dx * c; y[b] -= dy * c;
+      }
+      for (let n = 0; n < T; n++) {
+        const t = fwd ? n : T - 1 - n, a = ta[t], b = tb[t], c = tc[t];
+        const fm = (fl[a] + fl[b] + fl[c]) / 3;
+        const C = .5 * ((x[b] - x[a]) * (y[c] - y[a]) - (x[c] - x[a]) * (y[b] - y[a])) - tA[t] * fm * fm;
+        const gax = .5 * (y[b] - y[c]), gay = .5 * (x[c] - x[b]);
+        const gbx = .5 * (y[c] - y[a]), gby = .5 * (x[a] - x[c]);
+        const gcx = .5 * (y[a] - y[b]), gcy = .5 * (x[b] - x[a]);
+        const sum = gax * gax + gay * gay + gbx * gbx + gby * gby + gcx * gcx + gcy * gcy;
+        if (sum < 1e-9) continue;
+        const l = -C / sum * kA;
+        x[a] += gax * l; y[a] += gay * l; x[b] += gbx * l; y[b] += gby * l; x[c] += gcx * l; y[c] += gcy * l;
+      }
+      for (const p of ptrs.values()) {
+        if (!p.grabs) continue;
+        for (const gr of p.grabs) {
+          x[gr.i] += (p.x + gr.ox - x[gr.i]) * gr.w;
+          y[gr.i] += (p.y + gr.oy - y[gr.i]) * gr.w;
+        }
+      }
+      for (let i = 0; i < N; i++) {
+        if (x[i] < lo) x[i] = lo; else if (x[i] > hiX) x[i] = hiX;
+        if (y[i] < lo) y[i] = lo; else if (y[i] > hiY) y[i] = hiY;
+      }
+    }
+
+    // clay remembers where you left it; rubber remembers where it started
+    const m = P.mem, rate = .1 * (1 - m), ret = .03 * m * m;
+    for (let e = 0; e < E; e++) {
+      const a = ea[e], b = eb[e];
+      const cur = Math.hypot(x[b] - x[a], y[b] - y[a]) / ((fl[a] + fl[b]) * .5);
+      let r = er[e];
+      const hi = r * (1 + YIELD), lw = r * (1 - YIELD);
+      if (cur > hi) r += (cur - hi) * rate; else if (cur < lw) r += (cur - lw) * rate;
+      r += (er0[e] - r) * ret;
+      const r0 = er0[e];
+      er[e] = r < r0 * RMIN ? r0 * RMIN : r > r0 * RMAX ? r0 * RMAX : r;
+    }
+    if (ret > 0) for (let i = 0; i < N; i++) fl[i] += (1 - fl[i]) * ret;
+
+    if (resetT > 0) {
+      resetT--;
+      for (let i = 0; i < N; i++) {
+        const dx = (cx + hx[i] * S - x[i]) * .1, dy = (cy + hy[i] * S - y[i]) * .1;
+        x[i] += dx; y[i] += dy; px[i] += dx; py[i] += dy;
+        fl[i] += (1 - fl[i]) * .2;
+      }
+      for (let e = 0; e < E; e++) er[e] += (er0[e] - er[e]) * .2;
+    }
+  }
+
+  // ---------- drawing ----------
+  const at = (o, arr) => arr[o.a] * o.wa + arr[o.b] * o.wb + arr[o.c] * o.wc;
+
+  function draw(now) {
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+
+    const path = new Path2D();
+    for (const L of loops) {
+      const n = L.length; let a = L[n - 1], b = L[0];
+      path.moveTo((x[a] + x[b]) / 2, (y[a] + y[b]) / 2);
+      for (let i = 0; i < n; i++) {
+        const c = L[i], d = L[(i + 1) % n];
+        path.quadraticCurveTo(x[c], y[c], (x[c] + x[d]) / 2, (y[c] + y[d]) / 2);
+      }
+      path.closePath();
+    }
+    ctx.save(); ctx.translate(0, S * .014); ctx.globalAlpha = .13; ctx.fillStyle = fg; ctx.fill(path); ctx.restore();
+    ctx.fillStyle = fg; ctx.fill(path);
+    ctx.strokeStyle = bg; ctx.lineWidth = 1; ctx.lineJoin = 'round'; ctx.stroke(path);  // shows a limb folded over the body
+
+    if (P.mesh) {
+      ctx.beginPath();
+      for (let e = 0; e < E; e++) { ctx.moveTo(x[ea[e]], y[ea[e]]); ctx.lineTo(x[eb[e]], y[eb[e]]); }
+      ctx.globalAlpha = .45; ctx.lineWidth = .6; ctx.strokeStyle = bg; ctx.stroke(); ctx.globalAlpha = 1;
+    }
+
+    // face
+    const f = face, held = ptrs.size > 0;
+    const lx = at(f.el, x), ly = at(f.el, y), rx = at(f.er, x), ry = at(f.er, y);
+    const dist = Math.hypot(rx - lx, ry - ly) || 1, ax = (rx - lx) / dist, ay = (ry - ly) / dist;
+    const sc = Math.min(2.6, Math.max(.5, dist / (.08 * S)));
+    const asleep = !held && now - lastTouch > 9000;
+    if (now > nextBlink) { blinkUntil = now + 130; nextBlink = now + 2200 + Math.random() * 3800; }
+    const shut = asleep || (!held && now < blinkUntil);
+    const r = S * .0125 * sc * (held ? 1.35 : 1);
+    ctx.fillStyle = bg; ctx.strokeStyle = bg; ctx.lineCap = 'round';
+    for (const [ex, ey] of [[lx, ly], [rx, ry]]) {
+      ctx.beginPath();
+      if (shut) { ctx.lineWidth = r * .7; ctx.moveTo(ex - ax * r, ey - ay * r); ctx.lineTo(ex + ax * r, ey + ay * r); ctx.stroke(); }
+      else { ctx.arc(ex, ey, r, 0, 6.2832); ctx.fill(); }
+    }
+    const m1x = at(f.ml, x), m1y = at(f.ml, y), m2x = at(f.mr, x), m2y = at(f.mr, y), mx = at(f.mm, x), my = at(f.mm, y);
+    ctx.beginPath();
+    if (held) { ctx.arc(mx, my, S * .014 * sc, 0, 6.2832); ctx.fill(); }
+    else {
+      ctx.lineWidth = S * .009 * sc;
+      ctx.moveTo(m1x, m1y); ctx.quadraticCurveTo(2 * mx - (m1x + m2x) / 2, 2 * my - (m1y + m2y) / 2, m2x, m2y); ctx.stroke();
+    }
+
+    // finger
+    const rings = [];
+    for (const p of ptrs.values()) rings.push(p);
+    if (!rings.length && hover) rings.push(hover);
+    if (rings.length) {
+      ctx.save(); ctx.globalCompositeOperation = 'difference'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.25;
+      const R = fingerR();
+      for (const p of rings) {
+        ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, 6.2832); ctx.stroke();
+        if (tool !== 'pull') {
+          ctx.beginPath(); ctx.arc(p.x, p.y, tool === 'press' ? R * .55 : 2, 0, 6.2832); ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+  }
+
+  // ---------- loop ----------
+  let last = performance.now(), acc = 0, frameNo = 0;
+  function frame(now) {
+    acc += Math.min(50, now - last); last = now;
+    let n = 0;
+    while (acc >= 1000 / 120 && n < 4) { step(); acc -= 1000 / 120; n++; }
+    if (n === 4) acc = 0;
+    if (frameNo++ % 30 === 0) readColors();
+    draw(now);
+    requestAnimationFrame(frame);
+  }
+
+  function readColors() {
+    const cs = getComputedStyle(document.documentElement);
+    fg = cs.getPropertyValue('--fg').trim() || '#000';
+    bg = cs.getPropertyValue('--bg').trim() || '#fff';
+  }
+
+  const fitSize = () => Math.min(H * .7, W * 1.05, 780);
+  function resize() {
+    W = window.innerWidth; H = window.innerHeight;
+    DPR = Math.min(2, window.devicePixelRatio || 1);
+    cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+    cx = W / 2; cy = H * .485;
+  }
+
+  // ---------- input ----------
+  const local = e => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+
+  cv.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+    const [qx, qy] = local(e);
+    const p = { x: qx, y: qy, tool, grabs: null };
+    if (tool === 'pull') {
+      const R = fingerR(), R2 = R * R; p.grabs = [];
+      for (let i = 0; i < N; i++) {
+        const dx = x[i] - qx, dy = y[i] - qy, d2 = dx * dx + dy * dy;
+        if (d2 < R2) { const w = 1 - d2 / R2; p.grabs.push({ i, w: w * w, ox: dx, oy: dy }); }
+      }
+    }
+    ptrs.set(e.pointerId, p);
+    lastTouch = performance.now(); resetT = 0;
+    cv.classList.add('holding');
+    $('hint').classList.add('gone');
+    $('panel').hidden = true; $('tune-btn').setAttribute('aria-expanded', 'false');
+  });
+  cv.addEventListener('pointermove', e => {
+    const [qx, qy] = local(e);
+    const p = ptrs.get(e.pointerId);
+    if (p) { p.x = qx; p.y = qy; lastTouch = performance.now(); }
+    hover = e.pointerType === 'mouse' ? { x: qx, y: qy } : null;
+  });
+  const up = e => {
+    ptrs.delete(e.pointerId);
+    lastTouch = performance.now();
+    if (!ptrs.size) cv.classList.remove('holding');
+  };
+  cv.addEventListener('pointerup', up);
+  cv.addEventListener('pointercancel', up);
+  cv.addEventListener('pointerleave', () => { hover = null; });
+  cv.addEventListener('contextmenu', e => e.preventDefault());
+
+  // ---------- controls ----------
+  function setTool(t) {
+    tool = t;
+    for (const b of document.querySelectorAll('.tools button')) b.setAttribute('aria-checked', String(b.dataset.tool === t));
+    cv.classList.toggle('ring', t !== 'pull');
+  }
+  for (const b of document.querySelectorAll('.tools button')) b.addEventListener('click', () => setTool(b.dataset.tool));
+
+  function reset() {
+    lastTouch = performance.now();
+    if (Math.abs(fitSize() - S) / S > .03) { S = fitSize(); build(); } else resetT = 110;
+  }
+  $('reset-btn').addEventListener('click', reset);
+
+  $('tune-btn').addEventListener('click', () => {
+    const open = $('panel').hidden;
+    $('panel').hidden = !open;
+    $('tune-btn').setAttribute('aria-expanded', String(open));
+  });
+  for (const key of ['soft', 'mem', 'slide', 'finger']) {
+    const el = $(key), sync = () => { P[key] = el.value / 100; $(key + '-out').value = el.value; };
+    el.addEventListener('input', sync); sync();
+  }
+  $('mesh-btn').addEventListener('click', () => {
+    P.mesh = !P.mesh; $('mesh-btn').setAttribute('aria-pressed', String(P.mesh));
+  });
+  $('invert-btn').addEventListener('click', () => {
+    const root = document.documentElement;
+    const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+    root.dataset.theme = dark ? 'light' : 'dark';
+    readColors();
+  });
+  window.addEventListener('keydown', e => {
+    if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k === '1') setTool('pull'); else if (k === '2') setTool('press'); else if (k === '3') setTool('pinch');
+    else if (k === 'r') reset();
+  });
+
+  window.addEventListener('resize', resize);
+  resize(); S = fitSize(); build(); readColors();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

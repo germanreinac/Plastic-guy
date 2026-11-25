@@ -7,12 +7,13 @@
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700&family=DM+Mono:wght@400;500&display=swap">
 <style>
-/* Layout: one full-bleed stage. The guy owns the middle; controls sit in the corners and stay out of the way. */
+/* Layout: one full-bleed 3D stage. The guy lies on a round board in the middle; controls sit in the corners. */
 :root {
   --bg: #ffffff;
   --fg: #0b0b0b;
   --mute: rgba(11, 11, 11, .5);
   --line: rgba(11, 11, 11, .16);
+  --disc: #ecece9;
   --display: "Bricolage Grotesque", "Helvetica Neue", Arial, sans-serif;
   --mono: "DM Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --gl: max(16px, env(safe-area-inset-left, 0px));
@@ -22,13 +23,13 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #0b0b0b; --fg: #f6f6f6;
-    --mute: rgba(246, 246, 246, .55); --line: rgba(246, 246, 246, .2);
+    --mute: rgba(246, 246, 246, .55); --line: rgba(246, 246, 246, .2); --disc: #2a2a2a;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #0b0b0b; --fg: #f6f6f6;
-  --mute: rgba(246, 246, 246, .55); --line: rgba(246, 246, 246, .2);
+  --mute: rgba(246, 246, 246, .55); --line: rgba(246, 246, 246, .2); --disc: #2a2a2a;
   color-scheme: dark;
 }
 
@@ -53,7 +54,6 @@ body {
   cursor: grab;
 }
 #stage.holding { cursor: grabbing; }
-#stage.ring { cursor: none; }
 
 .top {
   position: fixed; inset: 0 0 auto 0;
@@ -149,7 +149,7 @@ input[type="range"]::-moz-range-thumb {
 </style>
 </head>
 <body>
-<canvas id="stage" aria-label="A putty figure lying on the ground. Drag to deform it."></canvas>
+<canvas id="stage" aria-label="A clay figure lying on a board. Drag it to deform it; drag the background to look around."></canvas>
 
 <header class="top">
   <h1 class="mark">plastic guy</h1>
@@ -161,19 +161,19 @@ input[type="range"]::-moz-range-thumb {
 
 <section id="panel" aria-label="Putty settings" hidden>
   <div class="row">
-    <label for="soft">Softness</label><output id="soft-out" for="soft">50</output>
-    <input id="soft" type="range" min="0" max="100" value="50">
+    <label for="soft">Softness</label><output id="soft-out" for="soft">40</output>
+    <input id="soft" type="range" min="0" max="100" value="40">
     <div class="ends"><span>firm</span><span>gooey</span></div>
   </div>
   <div class="row">
-    <label for="mem">Spring back</label><output id="mem-out" for="mem">15</output>
-    <input id="mem" type="range" min="0" max="100" value="15">
+    <label for="mem">Spring back</label><output id="mem-out" for="mem">10</output>
+    <input id="mem" type="range" min="0" max="100" value="10">
     <div class="ends"><span>clay</span><span>rubber</span></div>
   </div>
   <div class="row">
-    <label for="slide">Slide</label><output id="slide-out" for="slide">50</output>
-    <input id="slide" type="range" min="0" max="100" value="50">
-    <div class="ends"><span>sticky</span><span>ice</span></div>
+    <label for="slide">Slide</label><output id="slide-out" for="slide">30</output>
+    <input id="slide" type="range" min="0" max="100" value="30">
+    <div class="ends"><span>sticky</span><span>slippery</span></div>
   </div>
   <div class="row">
     <label for="finger">Finger size</label><output id="finger-out" for="finger">40</output>
@@ -182,11 +182,14 @@ input[type="range"]::-moz-range-thumb {
   </div>
   <div class="switches">
     <button id="mesh-btn" type="button" aria-pressed="false">Mesh</button>
-    <button id="invert-btn" type="button">Invert</button>
+    <button id="clay-btn" type="button" aria-pressed="false">Dark clay</button>
+  </div>
+  <div class="switches">
+    <button id="invert-btn" type="button">Invert room</button>
   </div>
 </section>
 
-<p id="hint">Grab the guy. Pull, press, pinch.</p>
+<p id="hint">Drag the guy to shape him. Drag the background to look around.</p>
 
 <nav class="tools" role="radiogroup" aria-label="Tool">
   <button type="button" role="radio" aria-checked="true" data-tool="pull" id="tool-pull">Pull</button>
@@ -194,374 +197,600 @@ input[type="range"]::-moz-range-thumb {
   <button type="button" role="radio" aria-checked="false" data-tool="pinch" id="tool-pinch">Pinch</button>
 </nav>
 
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 <script>
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
-  const cv = $('stage'), ctx = cv.getContext('2d');
+  const cv = $('stage');
+  if (!window.THREE) { $('hint').textContent = 'Could not load the 3D engine. Check your connection and reload.'; return; }
+  const T3 = window.THREE;
 
-  // ---------- state ----------
-  let W = 0, H = 0, DPR = 1, S = 1, cx = 0, cy = 0;
-  let N = 0, x, y, px, py, fl, hx, hy;        // particles (fl = how flattened: >1 pressed thin, <1 bunched up)
-  let E = 0, ea, eb, er, er0;                 // springs (er = current plastic rest length)
-  let T = 0, ta, tb, tc, tA;                  // triangles, rest area (putty volume is conserved)
-  let loops = [], face = null;
-  let resetT = 0, lastTouch = performance.now(), nextBlink = 2500, blinkUntil = 0;
-  let fg = '#000', bg = '#fff';
-  const P = { soft: .5, mem: .15, slide: .5, finger: .4, mesh: false };
+  // ---------- settings ----------
+  const P = { soft: .4, mem: .1, slide: .3, finger: .4, mesh: false, dark: false };
   let tool = 'pull';
-  const ptrs = new Map();
-  let hover = null;
+  const H = .028;                       // spacing of the simulation lattice
+  const ITER = 4, YIELD = .08, RMIN = .3, RMAX = 3.5;
+  const GRAV = 6 / (120 * 120), DC = H * .85, BOARD = .93;
 
-  const ITER = 5, YIELD = .07, FMAX = 1.75, FMIN = .6, RMIN = .28, RMAX = 3.6;
-
-  // ---------- the guy, as a signed distance field in unit space (about 1 unit tall) ----------
-  const seg = (x, y, ax, ay, bx, by, r) => {
-    const vx = bx - ax, vy = by - ay, wx = x - ax, wy = y - ay;
-    let t = (wx * vx + wy * vy) / (vx * vx + vy * vy);
+  // ---------- the guy, as a signed distance field (about 1 unit long, lying on y = 0) ----------
+  const cap = (x, y, z, ax, ay, az, bx, by, bz, r) => {
+    const vx = bx - ax, vy = by - ay, vz = bz - az, wx = x - ax, wy = y - ay, wz = z - az;
+    let t = (wx * vx + wy * vy + wz * vz) / (vx * vx + vy * vy + vz * vz);
     t = t < 0 ? 0 : t > 1 ? 1 : t;
-    return Math.hypot(wx - vx * t, wy - vy * t) - r;
+    const dx = wx - vx * t, dy = wy - vy * t, dz = wz - vz * t;
+    return Math.sqrt(dx * dx + dy * dy + dz * dz) - r;
   };
-  const cir = (x, y, ax, ay, r) => Math.hypot(x - ax, y - ay) - r;
+  const sph = (x, y, z, ax, ay, az, r) => { const dx = x - ax, dy = y - ay, dz = z - az; return Math.sqrt(dx * dx + dy * dy + dz * dz) - r; };
   const smin = (a, b, k) => { const h = Math.max(k - Math.abs(a - b), 0) / k; return Math.min(a, b) - h * h * k * .25; };
-  function sdf(x, y) {
+  function sdf(x, y, z) {
     const K = .045;
-    let d = cir(x, y, 0, -.345, .105);                         // head
-    d = smin(d, seg(x, y, 0, -.17, 0, .06, .1), K);            // chest
-    d = smin(d, cir(x, y, 0, .035, .115), K);                  // belly
-    d = smin(d, seg(x, y, -.07, -.17, -.33, -.25, .043), K);   // arm, flung up
-    d = smin(d, cir(x, y, -.35, -.258, .055), K);
-    d = smin(d, seg(x, y, .07, -.17, .34, -.06, .043), K);     // arm, flopped out
-    d = smin(d, cir(x, y, .36, -.05, .055), K);
-    d = smin(d, seg(x, y, -.05, .09, -.15, .4, .055), K);      // legs
-    d = smin(d, cir(x, y, -.165, .42, .066), K);
-    d = smin(d, seg(x, y, .05, .09, .19, .37, .055), K);
-    d = smin(d, cir(x, y, .205, .385, .066), K);
-    return d;
+    let d = sph(x, y, z, 0, .105, -.345, .105);                              // head
+    d = smin(d, cap(x, y, z, 0, .1, -.17, 0, .1, .06, .1), K);               // chest
+    d = smin(d, sph(x, y, z, 0, .112, .035, .115), K);                       // belly
+    d = smin(d, cap(x, y, z, -.07, .07, -.17, -.33, .045, -.25, .043), K);   // arm, flung up
+    d = smin(d, sph(x, y, z, -.35, .055, -.258, .055), K);
+    d = smin(d, cap(x, y, z, .07, .07, -.17, .34, .045, -.06, .043), K);     // arm, flopped out
+    d = smin(d, sph(x, y, z, .36, .055, -.05, .055), K);
+    d = smin(d, cap(x, y, z, -.05, .075, .09, -.15, .056, .4, .055), K);     // legs
+    d = smin(d, sph(x, y, z, -.165, .066, .42, .066), K);
+    d = smin(d, cap(x, y, z, .05, .075, .09, .19, .056, .37, .055), K);
+    d = smin(d, sph(x, y, z, .205, .066, .385, .066), K);
+    d += .0035 * Math.sin(31 * x + 1.3) * Math.sin(27 * z + .4) * Math.sin(23 * y + 2.1);  // hand-rolled lumps
+    return Math.max(d, -y);                                                  // flat where it meets the board
   }
 
-  // ---------- mesh ----------
-  function build() {
-    const h = .018, rh = h * Math.sqrt(3) / 2;
-    const cols = Math.ceil(1.1 / h), rows = Math.ceil(1.1 / rh);
-    const id = new Int32Array(cols * rows).fill(-1);
-    let ux = [], uy = [];
-    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
-      const X = -.55 + (i + (j & 1) * .5) * h, Y = -.55 + j * rh;
-      if (sdf(X, Y) < -.15 * h) { id[j * cols + i] = ux.length; ux.push(X); uy.push(Y); }
-    }
-    const g = (j, i) => (i < 0 || j < 0 || i >= cols || j >= rows) ? -1 : id[j * cols + i];
-    let tris = [];
-    const add = (a, b, c) => {
-      if (a < 0 || b < 0 || c < 0) return;
-      const A = (ux[b] - ux[a]) * (uy[c] - uy[a]) - (ux[c] - ux[a]) * (uy[b] - uy[a]);
-      if (A < 0) tris.push(a, c, b); else tris.push(a, b, c);
+  // ---------- simulation mesh: tetrahedra on a lattice ----------
+  let N = 0, X, PX, HX, LI;             // node positions, previous, home, lattice coords
+  let E = 0, ea, eb, er, er0;           // edges with plastic rest lengths
+  let NT = 0, tn, tv;                   // tets (4 nodes each) and rest volumes
+  let cubeTet, ncx, ncy, ncz;
+  const LMIN = [-.5, 0, -.5];
+
+  function buildSim() {
+    ncx = Math.ceil(1 / H); ncy = Math.ceil(.26 / H); ncz = Math.ceil(1.04 / H);
+    const sx = ncx + 1, sy = ncy + 1, sz = ncz + 1;
+    const nid = new Int32Array(sx * sy * sz).fill(-1);
+    const xs = [], li = [];
+    const node = (i, j, k) => {
+      const q = i + sx * (j + sy * k);
+      if (nid[q] < 0) { nid[q] = xs.length / 3; xs.push(LMIN[0] + i * H, LMIN[1] + j * H, LMIN[2] + k * H); li.push(i, j, k); }
+      return nid[q];
     };
-    for (let j = 0; j < rows; j++) for (let i = 0; i < cols; i++) {
-      const a = g(j, i); if (a < 0) continue;
-      if (j & 1) { add(a, g(j, i + 1), g(j + 1, i + 1)); add(a, g(j + 1, i + 1), g(j + 1, i)); }
-      else { add(a, g(j, i + 1), g(j + 1, i)); add(a, g(j + 1, i), g(j + 1, i - 1)); }
+    cubeTet = new Int32Array(ncx * ncy * ncz).fill(-1);
+    const KUHN = [[0, 1, 3, 7], [0, 1, 5, 7], [0, 2, 3, 7], [0, 2, 6, 7], [0, 4, 5, 7], [0, 4, 6, 7]];
+    const tets = [];
+    for (let k = 0; k < ncz; k++) for (let j = 0; j < ncy; j++) for (let i = 0; i < ncx; i++) {
+      if (sdf(LMIN[0] + (i + .5) * H, LMIN[1] + (j + .5) * H, LMIN[2] + (k + .5) * H) >= 0) continue;
+      const c = [];
+      for (let b = 0; b < 8; b++) c.push(node(i + (b & 1), j + ((b >> 1) & 1), k + ((b >> 2) & 1)));
+      cubeTet[i + ncx * (j + ncy * k)] = tets.length / 4;
+      for (const t of KUHN) tets.push(c[t[0]], c[t[1]], c[t[2]], c[t[3]]);
     }
-    // drop loose particles
-    const map = new Int32Array(ux.length).fill(-1); let n = 0;
-    for (const v of tris) if (map[v] < 0) map[v] = n++;
-    const nx = new Array(n), ny = new Array(n);
-    for (let i = 0; i < ux.length; i++) if (map[i] >= 0) { nx[map[i]] = ux[i]; ny[map[i]] = uy[i]; }
-    ux = nx; uy = ny; tris = tris.map(v => map[v]); N = n;
-
-    // edges, and the directed boundary
-    const dir = new Set(), und = new Set();
-    for (let t = 0; t < tris.length; t += 3) for (let k = 0; k < 3; k++) {
-      const a = tris[t + k], b = tris[t + (k + 1) % 3];
-      dir.add(a * N + b); und.add(a < b ? a * N + b : b * N + a);
-    }
-    const out = new Map();
-    for (const key of dir) {
-      const a = Math.floor(key / N), b = key % N;
-      if (!dir.has(b * N + a)) { if (!out.has(a)) out.set(a, []); out.get(a).push(b); }
-    }
-    // pull the rim onto the true outline so the silhouette starts smooth
-    for (const v of out.keys()) for (let k = 0; k < 3; k++) {
-      const e = 1e-4, d = sdf(ux[v], uy[v]);
-      let gx = sdf(ux[v] + e, uy[v]) - sdf(ux[v] - e, uy[v]), gy = sdf(ux[v], uy[v] + e) - sdf(ux[v], uy[v] - e);
-      const gl = Math.hypot(gx, gy) || 1;
-      ux[v] -= gx / gl * d; uy[v] -= gy / gl * d;
-    }
-    loops = [];
-    while (out.size) {
-      const start = out.keys().next().value, L = [];
-      let cur = start;
-      do {
-        L.push(cur);
-        const l = out.get(cur), nxt = l.pop();
-        if (!l.length) out.delete(cur);
-        cur = nxt;
-      } while (cur !== start && out.has(cur));
-      if (L.length > 2) loops.push(L);
-    }
-
-    // to screen
-    x = new Float32Array(N); y = new Float32Array(N); px = new Float32Array(N); py = new Float32Array(N);
-    fl = new Float32Array(N).fill(1); hx = Float32Array.from(ux); hy = Float32Array.from(uy);
-    for (let i = 0; i < N; i++) { px[i] = x[i] = cx + ux[i] * S; py[i] = y[i] = cy + uy[i] * S; }
-    E = und.size; ea = new Uint16Array(E); eb = new Uint16Array(E); er = new Float32Array(E); er0 = new Float32Array(E);
-    let k = 0;
-    for (const key of und) {
-      const a = Math.floor(key / N), b = key % N;
-      ea[k] = a; eb[k] = b; er0[k] = er[k] = Math.hypot(x[b] - x[a], y[b] - y[a]); k++;
-    }
-    T = tris.length / 3; ta = new Uint16Array(T); tb = new Uint16Array(T); tc = new Uint16Array(T); tA = new Float32Array(T);
-    for (let t = 0; t < T; t++) {
-      const a = ta[t] = tris[t * 3], b = tb[t] = tris[t * 3 + 1], c = tc[t] = tris[t * 3 + 2];
-      tA[t] = .5 * ((x[b] - x[a]) * (y[c] - y[a]) - (x[c] - x[a]) * (y[b] - y[a]));
-    }
-    // face, pinned into the mesh so it deforms with the head
-    const attach = (qx, qy) => {
-      for (let t = 0; t < T; t++) {
-        const a = ta[t], b = tb[t], c = tc[t];
-        const d = (hy[b] - hy[c]) * (hx[a] - hx[c]) + (hx[c] - hx[b]) * (hy[a] - hy[c]);
-        const wa = ((hy[b] - hy[c]) * (qx - hx[c]) + (hx[c] - hx[b]) * (qy - hy[c])) / d;
-        const wb = ((hy[c] - hy[a]) * (qx - hx[c]) + (hx[a] - hx[c]) * (qy - hy[c])) / d;
-        if (wa >= -1e-6 && wb >= -1e-6 && wa + wb <= 1 + 1e-6) return { a, b, c, wa, wb, wc: 1 - wa - wb };
-      }
-      return { a: 0, b: 0, c: 0, wa: 1, wb: 0, wc: 0 };
-    };
-    face = {
-      el: attach(-.04, -.36), er: attach(.04, -.36),
-      ml: attach(-.03, -.31), mr: attach(.03, -.31), mm: attach(0, -.297),
-    };
-    resetT = 0;
-  }
-
-  // ---------- physics ----------
-  const fingerR = () => S * (.03 + .13 * P.finger);
-
-  function step() {
-    const s = P.slide, damp = .997 - .12 * (1 - s) * (1 - s);
-    const maxv = S * .06;
+    N = xs.length / 3;
+    X = Float32Array.from(xs); LI = Int16Array.from(li);
+    // pull stray lattice corners onto the real surface
     for (let i = 0; i < N; i++) {
-      let vx = (x[i] - px[i]) * damp, vy = (y[i] - py[i]) * damp;
-      const v2 = vx * vx + vy * vy;
-      if (v2 > maxv * maxv) { const k = maxv / Math.sqrt(v2); vx *= k; vy *= k; }
-      px[i] = x[i]; py[i] = y[i]; x[i] += vx; y[i] += vy;
+      const o = 3 * i;
+      for (let n = 0; n < 4; n++) {
+        const d = sdf(X[o], X[o + 1], X[o + 2]);
+        if (d <= 1e-5) break;
+        const e = 1e-4;
+        const gx = sdf(X[o] + e, X[o + 1], X[o + 2]) - sdf(X[o] - e, X[o + 1], X[o + 2]);
+        const gy = sdf(X[o], X[o + 1] + e, X[o + 2]) - sdf(X[o], X[o + 1] - e, X[o + 2]);
+        const gz = sdf(X[o], X[o + 1], X[o + 2] + e) - sdf(X[o], X[o + 1], X[o + 2] - e);
+        const gl = Math.sqrt(gx * gx + gy * gy + gz * gz) || 1;
+        X[o] -= gx / gl * d; X[o + 1] -= gy / gl * d; X[o + 2] -= gz / gl * d;
+        if (X[o + 1] < 0) X[o + 1] = 0;
+      }
+    }
+    PX = Float32Array.from(X); HX = Float32Array.from(X);
+    NT = tets.length / 4; tn = Uint16Array.from(tets); tv = new Float32Array(NT);
+    for (let t = 0; t < NT; t++) {
+      let v = tetVol(tn[4 * t], tn[4 * t + 1], tn[4 * t + 2], tn[4 * t + 3]);
+      if (v < 0) { const s = tn[4 * t + 1]; tn[4 * t + 1] = tn[4 * t + 2]; tn[4 * t + 2] = s; v = -v; }
+      tv[t] = v;
+    }
+    const set = new Set();
+    const PAIRS = [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]];
+    for (let t = 0; t < NT; t++) for (const [p, q] of PAIRS) {
+      const a = tn[4 * t + p], b = tn[4 * t + q];
+      set.add(a < b ? a * N + b : b * N + a);
+    }
+    E = set.size; ea = new Uint16Array(E); eb = new Uint16Array(E); er = new Float32Array(E); er0 = new Float32Array(E);
+    let n = 0;
+    for (const key of set) {
+      const a = Math.floor(key / N), b = key % N;
+      ea[n] = a; eb[n] = b;
+      er0[n] = er[n] = Math.hypot(X[3 * b] - X[3 * a], X[3 * b + 1] - X[3 * a + 1], X[3 * b + 2] - X[3 * a + 2]);
+      n++;
+    }
+  }
+  function tetVol(a, b, c, d) {
+    a *= 3; b *= 3; c *= 3; d *= 3;
+    const x1 = X[b] - X[a], y1 = X[b + 1] - X[a + 1], z1 = X[b + 2] - X[a + 2];
+    const x2 = X[c] - X[a], y2 = X[c + 1] - X[a + 1], z2 = X[c + 2] - X[a + 2];
+    const x3 = X[d] - X[a], y3 = X[d + 1] - X[a + 1], z3 = X[d + 2] - X[a + 2];
+    return ((y1 * z2 - z1 * y2) * x3 + (z1 * x2 - x1 * z2) * y3 + (x1 * y2 - y1 * x2) * z3) / 6;
+  }
+
+  // ---------- visible skin: surface nets over the same field, bound to the tets ----------
+  let SV = 0, skinPos, skinUV, skinIdx, bindN, bindW;
+
+  function buildSkin() {
+    const c = .0085, min = [-.5, -2 * c, -.5];
+    const nx = Math.ceil(1 / c) + 1, ny = Math.ceil(.27 / c) + 1, nz = Math.ceil(1.04 / c) + 1;
+    const val = new Float32Array(nx * ny * nz);
+    for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++)
+      val[i + nx * (j + ny * k)] = sdf(min[0] + i * c, min[1] + j * c, min[2] + k * c);
+    const cellV = new Int32Array(nx * ny * nz).fill(-1);
+    const pos = [];
+    const EDGES = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
+    const cvv = new Float32Array(8);
+    for (let k = 0; k < nz - 1; k++) for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+      const q = i + nx * (j + ny * k);
+      let neg = 0;
+      for (let b = 0; b < 8; b++) { cvv[b] = val[q + (b & 1) + nx * (((b >> 1) & 1) + ny * ((b >> 2) & 1))]; if (cvv[b] < 0) neg++; }
+      if (neg === 0 || neg === 8) continue;
+      let ax = 0, ay = 0, az = 0, n = 0;
+      for (const [a, b] of EDGES) {
+        const va = cvv[a], vb = cvv[b];
+        if ((va < 0) === (vb < 0)) continue;
+        const t = va / (va - vb);
+        ax += (a & 1) + ((b & 1) - (a & 1)) * t;
+        ay += ((a >> 1) & 1) + (((b >> 1) & 1) - ((a >> 1) & 1)) * t;
+        az += ((a >> 2) & 1) + (((b >> 2) & 1) - ((a >> 2) & 1)) * t;
+        n++;
+      }
+      cellV[q] = pos.length / 3;
+      pos.push(min[0] + (i + ax / n) * c, min[1] + (j + ay / n) * c, min[2] + (k + az / n) * c);
+    }
+    const idx = [];
+    const quad = (a, b, cc, d, flip) => {
+      if (a < 0 || b < 0 || cc < 0 || d < 0) return;
+      if (flip) idx.push(a, cc, b, a, d, cc); else idx.push(a, b, cc, a, cc, d);
+    };
+    const C = (i, j, k) => cellV[i + nx * (j + ny * k)];
+    for (let k = 1; k < nz - 1; k++) for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+      const q = i + nx * (j + ny * k), v0 = val[q] < 0;
+      if (v0 !== (val[q + 1] < 0)) quad(C(i, j, k), C(i, j - 1, k), C(i, j - 1, k - 1), C(i, j, k - 1), v0);
+      if (v0 !== (val[q + nx] < 0)) quad(C(i, j, k), C(i, j, k - 1), C(i - 1, j, k - 1), C(i - 1, j, k), v0);
+      if (v0 !== (val[q + nx * ny] < 0)) quad(C(i, j, k), C(i - 1, j, k), C(i - 1, j - 1, k), C(i, j - 1, k), v0);
+    }
+    SV = pos.length / 3;
+    skinPos = Float32Array.from(pos); skinIdx = Uint32Array.from(idx);
+    // make sure faces point outward
+    {
+      const a = 3 * idx[0], b = 3 * idx[1], d = 3 * idx[2];
+      const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
+      const vx = pos[d] - pos[a], vy = pos[d + 1] - pos[a + 1], vz = pos[d + 2] - pos[a + 2];
+      const nx_ = uy * vz - uz * vy, ny_ = uz * vx - ux * vz, nz_ = ux * vy - uy * vx;
+      const l = Math.hypot(nx_, ny_, nz_) || 1, e = .004;
+      const mx = (pos[a] + pos[b] + pos[d]) / 3, my = (pos[a + 1] + pos[b + 1] + pos[d + 1]) / 3, mz = (pos[a + 2] + pos[b + 2] + pos[d + 2]) / 3;
+      if (sdf(mx + nx_ / l * e, my + ny_ / l * e, mz + nz_ / l * e) < sdf(mx - nx_ / l * e, my - ny_ / l * e, mz - nz_ / l * e))
+        for (let t = 0; t < skinIdx.length; t += 3) { const s = skinIdx[t + 1]; skinIdx[t + 1] = skinIdx[t + 2]; skinIdx[t + 2] = s; }
+    }
+    // top-down projection for the painted face and the surface grain
+    skinUV = new Float32Array(SV * 2);
+    for (let v = 0; v < SV; v++) { skinUV[2 * v] = (pos[3 * v] + .55) / 1.1; skinUV[2 * v + 1] = 1 - (pos[3 * v + 2] + .55) / 1.1; }
+
+    // bind every skin vertex to the tet that holds it best
+    bindN = new Uint16Array(SV * 4); bindW = new Float32Array(SV * 4);
+    const w = [0, 0, 0, 0], minVol = H * H * H / 6 * .05;
+    for (let v = 0; v < SV; v++) {
+      const qx = pos[3 * v], qy = pos[3 * v + 1], qz = pos[3 * v + 2];
+      const ci = Math.floor((qx - LMIN[0]) / H), cj = Math.floor((qy - LMIN[1]) / H), ck = Math.floor((qz - LMIN[2]) / H);
+      let best = -1e9, bt = -1;
+      for (let reach = 1; reach <= 3 && bt < 0; reach++)
+        for (let k = ck - reach; k <= ck + reach; k++) for (let j = cj - reach; j <= cj + reach; j++) for (let i = ci - reach; i <= ci + reach; i++) {
+          if (i < 0 || j < 0 || k < 0 || i >= ncx || j >= ncy || k >= ncz) continue;
+          const t0 = cubeTet[i + ncx * (j + ncy * k)];
+          if (t0 < 0) continue;
+          for (let t = t0; t < t0 + 6; t++) {
+            if (tv[t] < minVol) continue;
+            bary(t, qx, qy, qz, w);
+            const s = Math.min(w[0], w[1], w[2], w[3]);
+            if (s > best) { best = s; bt = t; }
+          }
+        }
+      if (bt < 0) bt = 0;
+      bary(bt, qx, qy, qz, w);
+      for (let n = 0; n < 4; n++) { bindN[4 * v + n] = tn[4 * bt + n]; bindW[4 * v + n] = w[n]; }
+    }
+  }
+  function bary(t, qx, qy, qz, w) {
+    const a = 3 * tn[4 * t], b = 3 * tn[4 * t + 1], c = 3 * tn[4 * t + 2], d = 3 * tn[4 * t + 3];
+    const x1 = X[b] - X[a], y1 = X[b + 1] - X[a + 1], z1 = X[b + 2] - X[a + 2];
+    const x2 = X[c] - X[a], y2 = X[c + 1] - X[a + 1], z2 = X[c + 2] - X[a + 2];
+    const x3 = X[d] - X[a], y3 = X[d + 1] - X[a + 1], z3 = X[d + 2] - X[a + 2];
+    const px = qx - X[a], py = qy - X[a + 1], pz = qz - X[a + 2];
+    const det = (y1 * z2 - z1 * y2) * x3 + (z1 * x2 - x1 * z2) * y3 + (x1 * y2 - y1 * x2) * z3;
+    w[1] = ((y2 * z3 - z2 * y3) * px + (z2 * x3 - x2 * z3) * py + (x2 * y3 - y2 * x3) * pz) / det;
+    w[2] = ((y3 * z1 - z3 * y1) * px + (z3 * x1 - x3 * z1) * py + (x3 * y1 - y3 * x1) * pz) / det;
+    w[3] = ((y1 * z2 - z1 * y2) * px + (z1 * x2 - x1 * z2) * py + (x1 * y2 - y1 * x2) * pz) / det;
+    w[0] = 1 - w[1] - w[2] - w[3];
+  }
+
+  // ---------- physics: position-based dynamics with plastic flow ----------
+  const ptrs = new Map();
+  let resetT = 0, calm = 0, asleep = false, lastMoved = 0;
+  const SLEEP = 1.5e-4;
+  const HS = 8192, hHead = new Int32Array(HS), pairs = [];
+  let hNext, hCx, hCy, hCz;
+  const fingerR = () => .035 + .075 * P.finger;
+
+  function findPairs() {
+    pairs.length = 0;
+    hHead.fill(-1);
+    const inv = 1 / DC;
+    for (let i = 0; i < N; i++) {
+      const cx = hCx[i] = Math.floor(X[3 * i] * inv), cy = hCy[i] = Math.floor(X[3 * i + 1] * inv), cz = hCz[i] = Math.floor(X[3 * i + 2] * inv);
+      const h = ((cx * 73856093) ^ (cy * 19349663) ^ (cz * 83492791)) & (HS - 1);
+      hNext[i] = hHead[h]; hHead[h] = i;
+    }
+    const d2max = DC * DC;
+    for (let i = 0; i < N; i++) {
+      const cx = hCx[i], cy = hCy[i], cz = hCz[i], xi = X[3 * i], yi = X[3 * i + 1], zi = X[3 * i + 2];
+      const li = LI[3 * i], lj = LI[3 * i + 1], lk = LI[3 * i + 2];
+      for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        const qx = cx + dx, qy = cy + dy, qz = cz + dz;
+        for (let j = hHead[((qx * 73856093) ^ (qy * 19349663) ^ (qz * 83492791)) & (HS - 1)]; j >= 0; j = hNext[j]) {
+          if (j <= i || hCx[j] !== qx || hCy[j] !== qy || hCz[j] !== qz) continue;
+          if (Math.abs(LI[3 * j] - li) <= 2 && Math.abs(LI[3 * j + 1] - lj) <= 2 && Math.abs(LI[3 * j + 2] - lk) <= 2) continue;  // same piece of clay
+          const ex = X[3 * j] - xi, ey = X[3 * j + 1] - yi, ez = X[3 * j + 2] - zi;
+          if (ex * ex + ey * ey + ez * ez < d2max) pairs.push(i, j);
+        }
+      }
+    }
+  }
+
+  function step(dtFinger) {
+    const MAXV = .03;
+    for (let o = 0; o < 3 * N; o += 3) {
+      let vx = (X[o] - PX[o]) * .99, vy = (X[o + 1] - PX[o + 1]) * .99 - GRAV, vz = (X[o + 2] - PX[o + 2]) * .99;
+      const v2 = vx * vx + vy * vy + vz * vz;
+      if (v2 > MAXV * MAXV) { const k = MAXV / Math.sqrt(v2); vx *= k; vy *= k; vz *= k; }
+      PX[o] = X[o]; PX[o + 1] = X[o + 1]; PX[o + 2] = X[o + 2];
+      X[o] += vx; X[o + 1] += vy; X[o + 2] += vz;
     }
 
-    // press flattens the putty (it spreads), pinch bunches it up
-    const R = fingerR(), R2 = R * R;
+    const R = fingerR();
     for (const p of ptrs.values()) {
-      if (p.tool === 'pull') continue;
-      const press = p.tool === 'press';
-      for (let i = 0; i < N; i++) {
-        const dx = x[i] - p.x, dy = y[i] - p.y, d2 = dx * dx + dy * dy;
-        if (d2 > R2) continue;
-        const w = 1 - d2 / R2, a = .012 * w * w;
-        fl[i] = press ? Math.min(FMAX, fl[i] + a) : Math.max(FMIN, fl[i] - a);
+      if (p.mode === 'press') {                       // the fingertip sinks while you hold
+        p.c.y = Math.max(R + .014, p.c.y - .22 * dtFinger);
+      } else if (p.mode === 'pinch') {                // squeeze the clay toward the fingertip
+        for (let o = 0; o < 3 * N; o += 3) {
+          const dx = p.c.x - X[o], dy = p.c.y - X[o + 1], dz = p.c.z - X[o + 2], d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 > R * R) continue;
+          const w = 1 - d2 / (R * R), a = .03 * w * w;
+          X[o] += dx * a; X[o + 1] += dy * a; X[o + 2] += dz * a;
+        }
       }
     }
 
-    const kE = 1 - .88 * P.soft, kA = .75 - .35 * P.soft;
-    const lo = 4, hiX = W - 4, hiY = H - 4;
+    findPairs();
+    const kE = 1 - .72 * P.soft, kV = .85 - .3 * P.soft;
     for (let it = 0; it < ITER; it++) {
       const fwd = !(it & 1);
       for (let n = 0; n < E; n++) {
-        const e = fwd ? n : E - 1 - n, a = ea[e], b = eb[e];
-        const dx = x[b] - x[a], dy = y[b] - y[a], d = Math.sqrt(dx * dx + dy * dy);
-        if (d < 1e-6) continue;
-        const c = (d - er[e] * (fl[a] + fl[b]) * .5) / d * .5 * kE;
-        x[a] += dx * c; y[a] += dy * c; x[b] -= dx * c; y[b] -= dy * c;
+        const e = fwd ? n : E - 1 - n, a = 3 * ea[e], b = 3 * eb[e];
+        const dx = X[b] - X[a], dy = X[b + 1] - X[a + 1], dz = X[b + 2] - X[a + 2];
+        const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (d < 1e-7) continue;
+        const c = (d - er[e]) / d * .5 * kE;
+        X[a] += dx * c; X[a + 1] += dy * c; X[a + 2] += dz * c;
+        X[b] -= dx * c; X[b + 1] -= dy * c; X[b + 2] -= dz * c;
       }
-      for (let n = 0; n < T; n++) {
-        const t = fwd ? n : T - 1 - n, a = ta[t], b = tb[t], c = tc[t];
-        const fm = (fl[a] + fl[b] + fl[c]) / 3;
-        const C = .5 * ((x[b] - x[a]) * (y[c] - y[a]) - (x[c] - x[a]) * (y[b] - y[a])) - tA[t] * fm * fm;
-        const gax = .5 * (y[b] - y[c]), gay = .5 * (x[c] - x[b]);
-        const gbx = .5 * (y[c] - y[a]), gby = .5 * (x[a] - x[c]);
-        const gcx = .5 * (y[a] - y[b]), gcy = .5 * (x[b] - x[a]);
-        const sum = gax * gax + gay * gay + gbx * gbx + gby * gby + gcx * gcx + gcy * gcy;
-        if (sum < 1e-9) continue;
-        const l = -C / sum * kA;
-        x[a] += gax * l; y[a] += gay * l; x[b] += gbx * l; y[b] += gby * l; x[c] += gcx * l; y[c] += gcy * l;
+      for (let n = 0; n < NT; n++) {                  // clay keeps its volume
+        const t = fwd ? n : NT - 1 - n;
+        const a = 3 * tn[4 * t], b = 3 * tn[4 * t + 1], c = 3 * tn[4 * t + 2], d = 3 * tn[4 * t + 3];
+        const x1 = X[b] - X[a], y1 = X[b + 1] - X[a + 1], z1 = X[b + 2] - X[a + 2];
+        const x2 = X[c] - X[a], y2 = X[c + 1] - X[a + 1], z2 = X[c + 2] - X[a + 2];
+        const x3 = X[d] - X[a], y3 = X[d + 1] - X[a + 1], z3 = X[d + 2] - X[a + 2];
+        const g1x = y2 * z3 - z2 * y3, g1y = z2 * x3 - x2 * z3, g1z = x2 * y3 - y2 * x3;
+        const g2x = y3 * z1 - z3 * y1, g2y = z3 * x1 - x3 * z1, g2z = x3 * y1 - y3 * x1;
+        const g3x = y1 * z2 - z1 * y2, g3y = z1 * x2 - x1 * z2, g3z = x1 * y2 - y1 * x2;
+        const g0x = -g1x - g2x - g3x, g0y = -g1y - g2y - g3y, g0z = -g1z - g2z - g3z;
+        const C = (g3x * x3 + g3y * y3 + g3z * z3) - 6 * tv[t];
+        const sum = g0x * g0x + g0y * g0y + g0z * g0z + g1x * g1x + g1y * g1y + g1z * g1z + g2x * g2x + g2y * g2y + g2z * g2z + g3x * g3x + g3y * g3y + g3z * g3z;
+        if (sum < 1e-18) continue;
+        const l = -C / sum * kV;
+        X[a] += g0x * l; X[a + 1] += g0y * l; X[a + 2] += g0z * l;
+        X[b] += g1x * l; X[b + 1] += g1y * l; X[b + 2] += g1z * l;
+        X[c] += g2x * l; X[c + 1] += g2y * l; X[c + 2] += g2z * l;
+        X[d] += g3x * l; X[d + 1] += g3y * l; X[d + 2] += g3z * l;
+      }
+      for (let n = 0; n < pairs.length; n += 2) {     // limbs rest on the body instead of passing through
+        const a = 3 * pairs[n], b = 3 * pairs[n + 1];
+        const dx = X[b] - X[a], dy = X[b + 1] - X[a + 1], dz = X[b + 2] - X[a + 2];
+        const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (d >= DC || d < 1e-7) continue;
+        const c = (DC - d) / d * .5;
+        X[a] -= dx * c; X[a + 1] -= dy * c; X[a + 2] -= dz * c;
+        X[b] += dx * c; X[b + 1] += dy * c; X[b + 2] += dz * c;
       }
       for (const p of ptrs.values()) {
-        if (!p.grabs) continue;
-        for (const gr of p.grabs) {
-          x[gr.i] += (p.x + gr.ox - x[gr.i]) * gr.w;
-          y[gr.i] += (p.y + gr.oy - y[gr.i]) * gr.w;
+        if (p.mode === 'pull') {
+          for (const g of p.grabs) {
+            const o = 3 * g.i;
+            X[o] += (p.c.x + g.ox - X[o]) * g.w;
+            X[o + 1] += (p.c.y + g.oy - X[o + 1]) * g.w;
+            X[o + 2] += (p.c.z + g.oz - X[o + 2]) * g.w;
+          }
+        } else if (p.mode === 'press') {
+          for (let o = 0; o < 3 * N; o += 3) {
+            const dx = X[o] - p.c.x, dy = X[o + 1] - p.c.y, dz = X[o + 2] - p.c.z, d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 >= R * R || d2 < 1e-12) continue;
+            const d = Math.sqrt(d2), k = (R - d) / d;
+            X[o] += dx * k; X[o + 1] += dy * k; X[o + 2] += dz * k;
+          }
         }
       }
-      for (let i = 0; i < N; i++) {
-        if (x[i] < lo) x[i] = lo; else if (x[i] > hiX) x[i] = hiX;
-        if (y[i] < lo) y[i] = lo; else if (y[i] > hiY) y[i] = hiY;
+      for (let o = 0; o < 3 * N; o += 3) {
+        if (X[o + 1] < 0) X[o + 1] = 0;
+        const r2 = X[o] * X[o] + X[o + 2] * X[o + 2];
+        if (r2 > BOARD * BOARD) { const k = BOARD / Math.sqrt(r2); X[o] *= k; X[o + 2] *= k; }
       }
+    }
+
+    // the board grips whatever touches it
+    const keep = .25 + .74 * P.slide;
+    for (let o = 0; o < 3 * N; o += 3) {
+      if (X[o + 1] > 2e-4) continue;
+      PX[o] = X[o] - (X[o] - PX[o]) * keep; PX[o + 2] = X[o + 2] - (X[o + 2] - PX[o + 2]) * keep;
     }
 
     // clay remembers where you left it; rubber remembers where it started
     const m = P.mem, rate = .1 * (1 - m), ret = .03 * m * m;
     for (let e = 0; e < E; e++) {
-      const a = ea[e], b = eb[e];
-      const cur = Math.hypot(x[b] - x[a], y[b] - y[a]) / ((fl[a] + fl[b]) * .5);
+      const a = 3 * ea[e], b = 3 * eb[e];
+      const dx = X[b] - X[a], dy = X[b + 1] - X[a + 1], dz = X[b + 2] - X[a + 2];
+      const cur = Math.sqrt(dx * dx + dy * dy + dz * dz);
       let r = er[e];
-      const hi = r * (1 + YIELD), lw = r * (1 - YIELD);
-      if (cur > hi) r += (cur - hi) * rate; else if (cur < lw) r += (cur - lw) * rate;
+      const hi = r * (1 + YIELD), lo = r * (1 - YIELD);
+      if (cur > hi) r += (cur - hi) * rate; else if (cur < lo) r += (cur - lo) * rate;
       r += (er0[e] - r) * ret;
       const r0 = er0[e];
       er[e] = r < r0 * RMIN ? r0 * RMIN : r > r0 * RMAX ? r0 * RMAX : r;
     }
-    if (ret > 0) for (let i = 0; i < N; i++) fl[i] += (1 - fl[i]) * ret;
 
     if (resetT > 0) {
       resetT--;
-      for (let i = 0; i < N; i++) {
-        const dx = (cx + hx[i] * S - x[i]) * .1, dy = (cy + hy[i] * S - y[i]) * .1;
-        x[i] += dx; y[i] += dy; px[i] += dx; py[i] += dy;
-        fl[i] += (1 - fl[i]) * .2;
-      }
+      for (let o = 0; o < 3 * N; o++) { const d = (HX[o] - X[o]) * .1; X[o] += d; PX[o] += d; }
       for (let e = 0; e < E; e++) er[e] += (er0[e] - er[e]) * .2;
     }
+
+    let moved = 0;
+    for (let o = 0; o < 3 * N; o++) { const d = X[o] - PX[o]; if (d > moved) moved = d; else if (-d > moved) moved = -d; }
+    lastMoved = moved;
+    calm = (moved < SLEEP && !ptrs.size && resetT === 0) ? calm + 1 : 0;
+    if (calm > 120) asleep = true;
+  }
+  const wake = () => { asleep = false; calm = 0; };
+
+  // ---------- scene ----------
+  const renderer = new T3.WebGLRenderer({ canvas: cv, antialias: true });
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = T3.PCFSoftShadowMap;
+  const scene = new T3.Scene();
+  const camera = new T3.PerspectiveCamera(32, 1, .1, 30);
+  const cam = { az: .35, pol: .78, zoom: 1, fit: 2.4 };
+  const target = new T3.Vector3(0, .05, .02);
+
+  scene.add(new T3.HemisphereLight(0xffffff, 0x8a8a8a, 1.15));
+  const key = new T3.DirectionalLight(0xffffff, 2.3);
+  key.position.set(-1.1, 2.4, 1.0);
+  key.castShadow = true;
+  key.shadow.mapSize.set(2048, 2048);
+  Object.assign(key.shadow.camera, { left: -1.2, right: 1.2, top: 1.2, bottom: -1.2, near: .5, far: 6 });
+  key.shadow.bias = -.0004; key.shadow.normalBias = .004; key.shadow.radius = 5;
+  scene.add(key);
+
+  const board = new T3.Mesh(new T3.CylinderGeometry(1, 1, .03, 128), new T3.MeshStandardMaterial({ roughness: 1 }));
+  board.position.y = -.015; board.receiveShadow = true;
+  scene.add(board);
+
+  buildSim(); buildSkin();
+  hNext = new Int32Array(N); hCx = new Int32Array(N); hCy = new Int32Array(N); hCz = new Int32Array(N);
+
+  const geo = new T3.BufferGeometry();
+  const posAttr = new T3.BufferAttribute(skinPos, 3); posAttr.setUsage(T3.DynamicDrawUsage);
+  geo.setAttribute('position', posAttr);
+  geo.setAttribute('uv', new T3.BufferAttribute(skinUV, 2));
+  geo.setIndex(new T3.BufferAttribute(skinIdx, 1));
+  geo.computeVertexNormals();
+  geo.boundingSphere = new T3.Sphere(new T3.Vector3(), 6);
+
+  // painted face + clay colour live in one texture so they stretch with the clay
+  const FS = 2048, faceCv = document.createElement('canvas'); faceCv.width = faceCv.height = FS;
+  const faceTex = new T3.CanvasTexture(faceCv); faceTex.colorSpace = T3.SRGBColorSpace; faceTex.anisotropy = 8;
+  let faceState = '';
+  function paintFace(state) {
+    const key_ = state + P.dark; if (key_ === faceState) return; faceState = key_;
+    const g = faceCv.getContext('2d'), u = FS / 1.1, tx = x => (x + .55) * u, tz = z => (z + .55) * u;
+    g.fillStyle = P.dark ? '#262626' : '#d8d7d2'; g.fillRect(0, 0, FS, FS);
+    const ink = P.dark ? '#f2f2f2' : '#111111';
+    g.fillStyle = ink; g.strokeStyle = ink; g.lineCap = 'round';
+    for (const ex of [-.04, .04]) {
+      g.beginPath();
+      if (state === 'asleep') { g.lineWidth = .008 * u; g.moveTo(tx(ex - .014), tz(-.358)); g.quadraticCurveTo(tx(ex), tz(-.35), tx(ex + .014), tz(-.358)); g.stroke(); }
+      else { g.arc(tx(ex), tz(-.36), (state === 'held' ? .017 : .0125) * u, 0, 6.2832); g.fill(); }
+    }
+    g.beginPath();
+    if (state === 'held') { g.arc(tx(0), tz(-.3), .015 * u, 0, 6.2832); g.fill(); }
+    else { g.lineWidth = .009 * u; g.moveTo(tx(-.03), tz(-.312)); g.quadraticCurveTo(tx(0), tz(-.282), tx(.03), tz(-.312)); g.stroke(); }
+    faceTex.needsUpdate = true;
+  }
+  // fine grain so the surface reads as clay, not plastic
+  const grainCv = document.createElement('canvas'); grainCv.width = grainCv.height = 256;
+  {
+    const g = grainCv.getContext('2d'), tmp = document.createElement('canvas');
+    g.fillStyle = '#808080'; g.fillRect(0, 0, 256, 256);
+    for (const [size, alpha] of [[32, .5], [64, .35], [128, .3], [256, .22]]) {
+      tmp.width = tmp.height = size;
+      const tg = tmp.getContext('2d'), im = tg.createImageData(size, size);
+      for (let i = 0; i < im.data.length; i += 4) { const v = Math.random() * 255; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255; }
+      tg.putImageData(im, 0, 0);
+      g.globalAlpha = alpha; g.imageSmoothingEnabled = true; g.drawImage(tmp, 0, 0, 256, 256);
+    }
+  }
+  const grain = new T3.CanvasTexture(grainCv); grain.wrapS = grain.wrapT = T3.RepeatWrapping; grain.repeat.set(7, 7);
+
+  const clay = new T3.MeshStandardMaterial({ map: faceTex, bumpMap: grain, bumpScale: 1.4, roughness: .86, metalness: 0 });
+  const guy = new T3.Mesh(geo, clay);
+  guy.castShadow = true; guy.receiveShadow = true; guy.frustumCulled = false;
+  scene.add(guy);
+  paintFace('awake');
+
+  const fingerGeo = new T3.SphereGeometry(1, 32, 20);
+  const fingerMat = new T3.MeshStandardMaterial({ color: 0x9a9a9a, transparent: true, opacity: .28, roughness: .5, depthWrite: false });
+
+  function skin() {
+    for (let v = 0; v < SV; v++) {
+      const q = 4 * v, a = 3 * bindN[q], b = 3 * bindN[q + 1], c = 3 * bindN[q + 2], d = 3 * bindN[q + 3];
+      const wa = bindW[q], wb = bindW[q + 1], wc = bindW[q + 2], wd = bindW[q + 3];
+      skinPos[3 * v] = X[a] * wa + X[b] * wb + X[c] * wc + X[d] * wd;
+      skinPos[3 * v + 1] = X[a + 1] * wa + X[b + 1] * wb + X[c + 1] * wc + X[d + 1] * wd;
+      skinPos[3 * v + 2] = X[a + 2] * wa + X[b + 2] * wb + X[c + 2] * wc + X[d + 2] * wd;
+    }
+    posAttr.needsUpdate = true;
+    geo.computeVertexNormals();
   }
 
-  // ---------- drawing ----------
-  const at = (o, arr) => arr[o.a] * o.wa + arr[o.b] * o.wb + arr[o.c] * o.wc;
-
-  function draw(now) {
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
-
-    const path = new Path2D();
-    for (const L of loops) {
-      const n = L.length; let a = L[n - 1], b = L[0];
-      path.moveTo((x[a] + x[b]) / 2, (y[a] + y[b]) / 2);
-      for (let i = 0; i < n; i++) {
-        const c = L[i], d = L[(i + 1) % n];
-        path.quadraticCurveTo(x[c], y[c], (x[c] + x[d]) / 2, (y[c] + y[d]) / 2);
-      }
-      path.closePath();
-    }
-    ctx.save(); ctx.translate(0, S * .014); ctx.globalAlpha = .13; ctx.fillStyle = fg; ctx.fill(path); ctx.restore();
-    ctx.fillStyle = fg; ctx.fill(path);
-    ctx.strokeStyle = bg; ctx.lineWidth = 1; ctx.lineJoin = 'round'; ctx.stroke(path);  // shows a limb folded over the body
-
-    if (P.mesh) {
-      ctx.beginPath();
-      for (let e = 0; e < E; e++) { ctx.moveTo(x[ea[e]], y[ea[e]]); ctx.lineTo(x[eb[e]], y[eb[e]]); }
-      ctx.globalAlpha = .45; ctx.lineWidth = .6; ctx.strokeStyle = bg; ctx.stroke(); ctx.globalAlpha = 1;
-    }
-
-    // face
-    const f = face, held = ptrs.size > 0;
-    const lx = at(f.el, x), ly = at(f.el, y), rx = at(f.er, x), ry = at(f.er, y);
-    const dist = Math.hypot(rx - lx, ry - ly) || 1, ax = (rx - lx) / dist, ay = (ry - ly) / dist;
-    const sc = Math.min(2.6, Math.max(.5, dist / (.08 * S)));
-    const asleep = !held && now - lastTouch > 9000;
-    if (now > nextBlink) { blinkUntil = now + 130; nextBlink = now + 2200 + Math.random() * 3800; }
-    const shut = asleep || (!held && now < blinkUntil);
-    const r = S * .0125 * sc * (held ? 1.35 : 1);
-    ctx.fillStyle = bg; ctx.strokeStyle = bg; ctx.lineCap = 'round';
-    for (const [ex, ey] of [[lx, ly], [rx, ry]]) {
-      ctx.beginPath();
-      if (shut) { ctx.lineWidth = r * .7; ctx.moveTo(ex - ax * r, ey - ay * r); ctx.lineTo(ex + ax * r, ey + ay * r); ctx.stroke(); }
-      else { ctx.arc(ex, ey, r, 0, 6.2832); ctx.fill(); }
-    }
-    const m1x = at(f.ml, x), m1y = at(f.ml, y), m2x = at(f.mr, x), m2y = at(f.mr, y), mx = at(f.mm, x), my = at(f.mm, y);
-    ctx.beginPath();
-    if (held) { ctx.arc(mx, my, S * .014 * sc, 0, 6.2832); ctx.fill(); }
-    else {
-      ctx.lineWidth = S * .009 * sc;
-      ctx.moveTo(m1x, m1y); ctx.quadraticCurveTo(2 * mx - (m1x + m2x) / 2, 2 * my - (m1y + m2y) / 2, m2x, m2y); ctx.stroke();
-    }
-
-    // finger
-    const rings = [];
-    for (const p of ptrs.values()) rings.push(p);
-    if (!rings.length && hover) rings.push(hover);
-    if (rings.length) {
-      ctx.save(); ctx.globalCompositeOperation = 'difference'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.25;
-      const R = fingerR();
-      for (const p of rings) {
-        ctx.beginPath(); ctx.arc(p.x, p.y, R, 0, 6.2832); ctx.stroke();
-        if (tool !== 'pull') {
-          ctx.beginPath(); ctx.arc(p.x, p.y, tool === 'press' ? R * .55 : 2, 0, 6.2832); ctx.stroke();
-        }
-      }
-      ctx.restore();
-    }
+  let needRender = true;
+  function placeCamera() {
+    const d = cam.fit * cam.zoom, s = Math.sin(cam.pol);
+    camera.position.set(target.x + d * s * Math.sin(cam.az), target.y + d * Math.cos(cam.pol), target.z + d * s * Math.cos(cam.az));
+    camera.lookAt(target);
+    needRender = true;
+  }
+  function readColors() {
+    const cs = getComputedStyle(document.documentElement);
+    const bg = cs.getPropertyValue('--bg').trim() || '#fff', disc = cs.getPropertyValue('--disc').trim() || '#fff';
+    if (readColors.last === bg + disc) return;
+    readColors.last = bg + disc;
+    renderer.setClearColor(new T3.Color(bg), 1);
+    board.material.color.set(disc);
+    needRender = true;
+  }
+  function resize() {
+    const w = window.innerWidth, h = window.innerHeight;
+    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    const t = Math.tan(camera.fov * Math.PI / 360);
+    cam.fit = Math.max(.66 / t, .56 / (t * camera.aspect));
+    camera.updateProjectionMatrix();
+    placeCamera();
   }
 
   // ---------- loop ----------
-  let last = performance.now(), acc = 0, frameNo = 0;
+  let last = performance.now(), acc = 0, frameNo = 0, lastTouch = last;
   function frame(now) {
     acc += Math.min(50, now - last); last = now;
+    if (asleep) acc = 0;
     let n = 0;
-    while (acc >= 1000 / 120 && n < 4) { step(); acc -= 1000 / 120; n++; }
-    if (n === 4) acc = 0;
+    while (acc >= 1000 / 120 && n < 3) { step(1 / 120); acc -= 1000 / 120; n++; }
+    if (n === 3) acc = 0;
     if (frameNo++ % 30 === 0) readColors();
-    draw(now);
+    paintFace(ptrs.size && [...ptrs.values()].some(p => p.mode !== 'orbit') ? 'held' : now - lastTouch > 9000 ? 'asleep' : 'awake');
+    if (n) { skin(); needRender = true; }
+    for (const p of ptrs.values()) if (p.mesh) { p.mesh.position.copy(p.c); p.mesh.scale.setScalar(fingerR()); }
+    if (needRender || faceTex.needsUpdate) { renderer.render(scene, camera); needRender = false; }
     requestAnimationFrame(frame);
   }
 
-  function readColors() {
-    const cs = getComputedStyle(document.documentElement);
-    fg = cs.getPropertyValue('--fg').trim() || '#000';
-    bg = cs.getPropertyValue('--bg').trim() || '#fff';
-  }
-
-  const fitSize = () => Math.min(H * .7, W * 1.05, 780);
-  function resize() {
-    W = window.innerWidth; H = window.innerHeight;
-    DPR = Math.min(2, window.devicePixelRatio || 1);
-    cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
-    cx = W / 2; cy = H * .485;
-  }
-
   // ---------- input ----------
-  const local = e => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  const ray = new T3.Raycaster(), ndc = new T3.Vector2(), tmpV = new T3.Vector3();
+  const setRay = e => {
+    const r = cv.getBoundingClientRect();
+    ndc.set((e.clientX - r.left) / r.width * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+  };
+  const orbiters = () => [...ptrs.values()].filter(p => p.mode === 'orbit');
 
   cv.addEventListener('pointerdown', e => {
     e.preventDefault();
     try { cv.setPointerCapture(e.pointerId); } catch (_) {}
-    const [qx, qy] = local(e);
-    const p = { x: qx, y: qy, tool, grabs: null };
-    if (tool === 'pull') {
-      const R = fingerR(), R2 = R * R; p.grabs = [];
-      for (let i = 0; i < N; i++) {
-        const dx = x[i] - qx, dy = y[i] - qy, d2 = dx * dx + dy * dy;
-        if (d2 < R2) { const w = 1 - d2 / R2; p.grabs.push({ i, w: w * w, ox: dx, oy: dy }); }
+    setRay(e);
+    const hit = ray.intersectObject(guy)[0];
+    const p = { mode: 'orbit', sx: e.clientX, sy: e.clientY, c: new T3.Vector3() };
+    if (hit) {
+      const R = fingerR(), nrm = hit.face.normal;
+      p.mode = tool;
+      if (tool === 'pull') {
+        p.c.copy(hit.point);
+        p.plane = new T3.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(tmpV).clone(), hit.point);
+        p.grabs = [];
+        for (let i = 0; i < N; i++) {
+          const ox = X[3 * i] - hit.point.x, oy = X[3 * i + 1] - hit.point.y, oz = X[3 * i + 2] - hit.point.z, d2 = ox * ox + oy * oy + oz * oz;
+          if (d2 < R * R) { const w = 1 - d2 / (R * R); p.grabs.push({ i, w: w * w, ox, oy, oz }); }
+        }
+      } else if (tool === 'press') {
+        p.c.copy(hit.point).addScaledVector(nrm, R);
+        if (p.c.y < R + .014) p.c.y = R + .014;
+      } else {
+        p.c.copy(hit.point).addScaledVector(nrm, -R * .35);
+        p.plane = new T3.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(tmpV).clone(), p.c);
       }
+      if (tool !== 'pull') { p.mesh = new T3.Mesh(fingerGeo, fingerMat); p.mesh.position.copy(p.c); p.mesh.scale.setScalar(R); scene.add(p.mesh); }
+      cv.classList.add('holding');
     }
     ptrs.set(e.pointerId, p);
-    lastTouch = performance.now(); resetT = 0;
-    cv.classList.add('holding');
+    lastTouch = performance.now(); resetT = 0; wake();
     $('hint').classList.add('gone');
     $('panel').hidden = true; $('tune-btn').setAttribute('aria-expanded', 'false');
   });
   cv.addEventListener('pointermove', e => {
-    const [qx, qy] = local(e);
     const p = ptrs.get(e.pointerId);
-    if (p) { p.x = qx; p.y = qy; lastTouch = performance.now(); }
-    hover = e.pointerType === 'mouse' ? { x: qx, y: qy } : null;
+    if (!p) return;
+    lastTouch = performance.now();
+    if (p.mode === 'orbit') {
+      const others = orbiters().filter(q => q !== p);
+      if (others.length) {                              // two fingers on the background: zoom
+        const o = others[0], before = Math.hypot(p.sx - o.sx, p.sy - o.sy), after = Math.hypot(e.clientX - o.sx, e.clientY - o.sy);
+        if (before > 1) cam.zoom = Math.min(1.9, Math.max(.5, cam.zoom * before / after));
+      } else {
+        cam.az -= (e.clientX - p.sx) * .006;
+        cam.pol = Math.min(1.4, Math.max(.08, cam.pol - (e.clientY - p.sy) * .005));
+      }
+      p.sx = e.clientX; p.sy = e.clientY;
+      placeCamera();
+      return;
+    }
+    setRay(e); wake();
+    if (p.mode === 'press') {
+      const t = (p.c.y - ray.ray.origin.y) / ray.ray.direction.y;
+      if (t > 0) { p.c.x = ray.ray.origin.x + ray.ray.direction.x * t; p.c.z = ray.ray.origin.z + ray.ray.direction.z * t; }
+    } else if (ray.ray.intersectPlane(p.plane, tmpV)) {
+      p.c.copy(tmpV);
+      if (p.c.y < 0) p.c.y = 0; else if (p.c.y > 1.1) p.c.y = 1.1;
+    }
   });
   const up = e => {
+    const p = ptrs.get(e.pointerId);
+    if (p && p.mesh) scene.remove(p.mesh);
     ptrs.delete(e.pointerId);
-    lastTouch = performance.now();
-    if (!ptrs.size) cv.classList.remove('holding');
+    lastTouch = performance.now(); needRender = true;
+    if (![...ptrs.values()].some(q => q.mode !== 'orbit')) cv.classList.remove('holding');
   };
   cv.addEventListener('pointerup', up);
   cv.addEventListener('pointercancel', up);
-  cv.addEventListener('pointerleave', () => { hover = null; });
   cv.addEventListener('contextmenu', e => e.preventDefault());
+  cv.addEventListener('wheel', e => {
+    e.preventDefault();
+    cam.zoom = Math.min(1.9, Math.max(.5, cam.zoom * Math.exp(e.deltaY * .0012)));
+    placeCamera();
+  }, { passive: false });
 
   // ---------- controls ----------
   function setTool(t) {
     tool = t;
     for (const b of document.querySelectorAll('.tools button')) b.setAttribute('aria-checked', String(b.dataset.tool === t));
-    cv.classList.toggle('ring', t !== 'pull');
   }
   for (const b of document.querySelectorAll('.tools button')) b.addEventListener('click', () => setTool(b.dataset.tool));
 
-  function reset() {
-    lastTouch = performance.now();
-    if (Math.abs(fitSize() - S) / S > .03) { S = fitSize(); build(); } else resetT = 110;
-  }
+  function reset() { lastTouch = performance.now(); resetT = 110; wake(); cam.az = .35; cam.pol = .78; cam.zoom = 1; placeCamera(); }
   $('reset-btn').addEventListener('click', reset);
 
   $('tune-btn').addEventListener('click', () => {
@@ -569,12 +798,16 @@ input[type="range"]::-moz-range-thumb {
     $('panel').hidden = !open;
     $('tune-btn').setAttribute('aria-expanded', String(open));
   });
-  for (const key of ['soft', 'mem', 'slide', 'finger']) {
-    const el = $(key), sync = () => { P[key] = el.value / 100; $(key + '-out').value = el.value; };
+  for (const k of ['soft', 'mem', 'slide', 'finger']) {
+    const el = $(k), sync = () => { P[k] = el.value / 100; $(k + '-out').value = el.value; wake(); };
     el.addEventListener('input', sync); sync();
   }
   $('mesh-btn').addEventListener('click', () => {
     P.mesh = !P.mesh; $('mesh-btn').setAttribute('aria-pressed', String(P.mesh));
+    clay.wireframe = P.mesh; needRender = true;
+  });
+  $('clay-btn').addEventListener('click', () => {
+    P.dark = !P.dark; $('clay-btn').setAttribute('aria-pressed', String(P.dark));
   });
   $('invert-btn').addEventListener('click', () => {
     const root = document.documentElement;
@@ -590,7 +823,8 @@ input[type="range"]::-moz-range-thumb {
   });
 
   window.addEventListener('resize', resize);
-  resize(); S = fitSize(); build(); readColors();
+  resize(); readColors();
+  window.plasticGuy = { stats: () => { let top = 0; for (let i = 1; i < 3 * N; i += 3) if (X[i] > top) top = X[i]; return { nodes: N, edges: E, tets: NT, skin: SV, top, asleep, moved: lastMoved }; } };
   requestAnimationFrame(frame);
 })();
 </script>

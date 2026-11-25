@@ -9,7 +9,7 @@
 <style>
 /* Layout: one full-bleed 3D stage. The guy lies on a round board in the middle; controls sit in the corners. */
 :root {
-  --bg: #f4f4f2;
+  --bg: #ffffff;
   --fg: #0b0b0b;
   --mute: rgba(11, 11, 11, .5);
   --line: rgba(11, 11, 11, .16);
@@ -51,7 +51,7 @@ body {
   width: 100%; height: 100%;
   display: block;
   touch-action: none;
-  cursor: grab;
+  cursor: default;
 }
 #stage.holding { cursor: grabbing; }
 
@@ -167,7 +167,7 @@ input[type="range"]::-moz-range-thumb {
 </style>
 </head>
 <body>
-<canvas id="stage" aria-label="A rubbery figure lying on the floor. Drag it to deform it; drag the background to look around."></canvas>
+<canvas id="stage" aria-label="A clay figure lying on the floor. Drag it to shape it."></canvas>
 
 <header class="top">
   <div class="left">
@@ -185,18 +185,18 @@ input[type="range"]::-moz-range-thumb {
 
 <section id="panel" aria-label="Putty settings" hidden>
   <div class="row">
-    <label for="soft">Softness</label><output id="soft-out" for="soft">40</output>
-    <input id="soft" type="range" min="0" max="100" value="40">
+    <label for="soft">Softness</label><output id="soft-out" for="soft">35</output>
+    <input id="soft" type="range" min="0" max="100" value="35">
     <div class="ends"><span>firm</span><span>gooey</span></div>
   </div>
   <div class="row">
-    <label for="mem">Spring back</label><output id="mem-out" for="mem">10</output>
-    <input id="mem" type="range" min="0" max="100" value="10">
+    <label for="mem">Spring back</label><output id="mem-out" for="mem">0</output>
+    <input id="mem" type="range" min="0" max="100" value="0">
     <div class="ends"><span>clay</span><span>rubber</span></div>
   </div>
   <div class="row">
-    <label for="slide">Slide</label><output id="slide-out" for="slide">25</output>
-    <input id="slide" type="range" min="0" max="100" value="25">
+    <label for="slide">Slide</label><output id="slide-out" for="slide">15</output>
+    <input id="slide" type="range" min="0" max="100" value="15">
     <div class="ends"><span>sticky</span><span>slippery</span></div>
   </div>
   <div class="row">
@@ -206,14 +206,14 @@ input[type="range"]::-moz-range-thumb {
   </div>
   <div class="switches">
     <button id="mesh-btn" type="button" aria-pressed="false">Mesh</button>
-    <button id="clay-btn" type="button" aria-pressed="false">Dark guy</button>
+    <button id="clay-btn" type="button" aria-pressed="false">Dark clay</button>
   </div>
   <div class="switches">
     <button id="invert-btn" type="button">Invert room</button>
   </div>
 </section>
 
-<p id="hint">Drag the guy to shape him. Drag the background to look around.</p>
+<p id="hint">Drag the guy to shape him.</p>
 
 <div id="palette" hidden>
   <button type="button" class="swatch" style="--c:#d8d7d2" data-shade="0" id="shade-0" aria-pressed="true" aria-label="White clay"></button>
@@ -239,11 +239,11 @@ input[type="range"]::-moz-range-thumb {
   const T3 = window.THREE;
 
   // ---------- settings ----------
-  const P = { soft: .4, mem: .1, slide: .25, finger: .5, mesh: false, dark: false };
+  const P = { soft: .35, mem: 0, slide: .15, finger: .5, mesh: false, dark: false };
   let mode = 'toy', tool = 'pull', shade = 0;
   const H = .028;                       // spacing of the simulation lattice
-  const ITER = 5, YIELD = .12, RMIN = .3, RMAX = 3.5;
-  const GRAV = 6 / (120 * 120), DC = H * .85, BOARD = .93;
+  const ITER = 5, YIELD = .1, RMIN = .4, RMAX = 3;
+  const GRAV = 2.5 / (120 * 120), DC = H * .85, BOARD = .93;
   const WELD = DC * 1.03, WELD_BREAK = WELD * 2.4;       // clay sticks on contact, tears off if yanked
   const CAPN = 12000, CAPE = 80000, CAPT = 56000, MAXN = 9000;
 
@@ -260,7 +260,7 @@ input[type="range"]::-moz-range-thumb {
   const lumps = (x, y, z) => .0035 * Math.sin(31 * x + 1.3) * Math.sin(27 * z + .4) * Math.sin(23 * y + 2.1);  // hand-rolled look
 
   const guyField = {
-    min: [-.5, 0, -.5], max: [.5, .26, .54], incl: 0,
+    min: [-.5, 0, -.5], max: [.5, .26, .54], incl: .45 * H,
     sdf(x, y, z) {
       const K = .045;
       let d = sph(x, y, z, 0, .105, -.345, .105);                              // head
@@ -300,7 +300,7 @@ input[type="range"]::-moz-range-thumb {
     }
     const e = r + .012;
     return {
-      min: [min[0] - e, Math.max(0, min[1] - e), min[2] - e], max: [max[0] + e, max[1] + e, max[2] + e], incl: .25 * H,
+      min: [min[0] - e, Math.max(0, min[1] - e), min[2] - e], max: [max[0] + e, max[1] + e, max[2] + e], incl: .45 * H,
       sdf(x, y, z) {
         const l = buckets.get((Math.floor(x / B) + 2048) * 4096 + Math.floor(z / B) + 2048);
         let d = PAD;
@@ -317,11 +317,13 @@ input[type="range"]::-moz-range-thumb {
     LI: new Int16Array(3 * CAPN), PI: new Uint16Array(CAPN),
     ea: new Uint32Array(CAPE), eb: new Uint32Array(CAPE), er: new Float32Array(CAPE), er0: new Float32Array(CAPE),
     tn: new Uint32Array(4 * CAPT), tv: new Float32Array(CAPT),
+    tL: new Float32Array(6 * CAPT), tL2: new Float32Array(6 * CAPT), tL20: new Float32Array(6 * CAPT),
     pieces: [], wa: [], wb: [], wkey: new Set(), wcnt: new Uint8Array(CAPN),
   });
   const worlds = { toy: newWorld(), create: newWorld() };
-  let W, N = 0, E = 0, NT = 0, X, PX, HX, LI, PI, ea, eb, er, er0, tn, tv;
-  function useWorld(w) { W = w; ({ N, E, NT, X, PX, HX, LI, PI, ea, eb, er, er0, tn, tv } = w); }
+  let W, N = 0, E = 0, NT = 0, X, PX, HX, LI, PI, ea, eb, er, er0, tn, tv, tL, tL2, tL20;
+  const EP0 = [0, 0, 0, 1, 1, 2], EP1 = [1, 2, 3, 2, 3, 3];
+  function useWorld(w) { W = w; ({ N, E, NT, X, PX, HX, LI, PI, ea, eb, er, er0, tn, tv, tL, tL2, tL20 } = w); }
   function saveCounts() { W.N = N; W.E = E; W.NT = NT; }
   useWorld(worlds.toy);
 
@@ -374,11 +376,12 @@ input[type="range"]::-moz-range-thumb {
       for (const t of KUHN) { tn[4 * NT] = c8[t[0]]; tn[4 * NT + 1] = c8[t[1]]; tn[4 * NT + 2] = c8[t[2]]; tn[4 * NT + 3] = c8[t[3]]; NT++; }
     }
     if (NT === t0) return fail();
-    // pull stray lattice corners onto the real surface
+    // the cells form a cage just outside the skin, so the skin is carried by them, never extrapolated;
+    // corners that stick out too far are pulled in to half a cell from the surface
     for (let i = n0; i < N; i++) {
       const o = 3 * i;
       for (let n = 0; n < 4; n++) {
-        const d = sdf(X[o], X[o + 1], X[o + 2]);
+        const d = sdf(X[o], X[o + 1], X[o + 2]) - .5 * H;
         if (d <= 1e-5) break;
         const e = 1e-4;
         const gx = sdf(X[o] + e, X[o + 1], X[o + 2]) - sdf(X[o] - e, X[o + 1], X[o + 2]);
@@ -394,6 +397,11 @@ input[type="range"]::-moz-range-thumb {
       let v = tetVol(tn[4 * t], tn[4 * t + 1], tn[4 * t + 2], tn[4 * t + 3]);
       if (v < 0) { const s = tn[4 * t + 1]; tn[4 * t + 1] = tn[4 * t + 2]; tn[4 * t + 2] = s; v = -v; }
       tv[t] = v;
+      for (let k = 0; k < 6; k++) {
+        const a = 3 * tn[4 * t + EP0[k]], b = 3 * tn[4 * t + EP1[k]];
+        const dx = X[b] - X[a], dy = X[b + 1] - X[a + 1], dz = X[b + 2] - X[a + 2], l2 = dx * dx + dy * dy + dz * dz;
+        tL2[6 * t + k] = tL20[6 * t + k] = l2; tL[6 * t + k] = Math.sqrt(l2);
+      }
     }
     const set = new Set();
     const PAIRS = [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]];
@@ -504,9 +512,7 @@ input[type="range"]::-moz-range-thumb {
     geo.setIndex(new T3.BufferAttribute(skinIdx, 1));
     geo.boundingSphere = new T3.Sphere(new T3.Vector3(), 6);
     const mesh = new T3.Mesh(geo, material);
-    mesh.castShadow = true; mesh.frustumCulled = false;
-    const ink = new T3.Mesh(geo, outlineMat); ink.frustumCulled = false; ink.raycast = () => {};
-    mesh.add(ink);
+    mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
     const piece = { n0, e0, t0, SV, skinPos, tmp: new Float32Array(SV * 3), nbStart, nbList, bindN, bindW, geo, posAttr, mesh };
     relax(piece); geo.computeVertexNormals();
     W.pieces.push(piece);
@@ -545,7 +551,9 @@ input[type="range"]::-moz-range-thumb {
   }
 
   // ---------- physics: position-based dynamics with plastic flow ----------
-  const ptrs = new Map();
+  const held = new Uint8Array(CAPN);
+  const SLIVER = H * H * H / 6 * .08, FOLLOW = .009;
+  const ptrs = new Map(), q4 = new Int32Array(4), l2 = new Float64Array(6);
   let resetT = 0, calm = 0, asleep = false, lastMoved = 0;
   const SLEEP = 1.5e-4;
   const HS = 16384, hHead = new Int32Array(HS), pairs = [];
@@ -584,7 +592,8 @@ input[type="range"]::-moz-range-thumb {
   function step(dtFinger) {
     const MAXV = .03;
     for (let o = 0; o < 3 * N; o += 3) {
-      let vx = (X[o] - PX[o]) * .994, vy = (X[o + 1] - PX[o + 1]) * .994 - GRAV, vz = (X[o + 2] - PX[o + 2]) * .994;
+      const damp = .8 + .19 * P.mem;                  // clay has no bounce; the Spring back slider adds some
+      let vx = (X[o] - PX[o]) * damp, vy = (X[o + 1] - PX[o + 1]) * damp - GRAV, vz = (X[o + 2] - PX[o + 2]) * damp;
       const v2 = vx * vx + vy * vy + vz * vz;
       if (v2 > MAXV * MAXV) { const k = MAXV / Math.sqrt(v2); vx *= k; vy *= k; vz *= k; }
       PX[o] = X[o]; PX[o + 1] = X[o + 1]; PX[o + 2] = X[o + 2];
@@ -593,6 +602,11 @@ input[type="range"]::-moz-range-thumb {
 
     const R = fingerR();
     for (const p of ptrs.values()) {
+      if (p.t) {                                      // clay is heavy: it follows the finger, it cannot be yanked
+        const dx = p.t.x - p.c.x, dy = p.mode === 'press' ? 0 : p.t.y - p.c.y, dz = p.t.z - p.c.z;
+        const d = Math.sqrt(dx * dx + dy * dy + dz * dz), k = d > FOLLOW ? FOLLOW / d : 1;
+        p.c.x += dx * k; p.c.y += dy * k; p.c.z += dz * k;
+      }
       if (p.mode === 'press') {                       // the fingertip sinks while you hold
         p.c.y = Math.max(R + .014, p.c.y - .22 * dtFinger);
       } else if (p.mode === 'pinch') {                // squeeze the clay toward the fingertip
@@ -606,22 +620,25 @@ input[type="range"]::-moz-range-thumb {
     }
 
     findPairs();
-    const grip = .35 + .65 * P.slide;
-    const kE = 1 - .72 * P.soft, kV = .85 - .3 * P.soft, wa = W.wa, wb = W.wb;
+    const grip = .0005 * (1 - P.slide) * (1 - P.slide);
+    held.fill(0, 0, N);
+    for (const p of ptrs.values()) if (p.grabs) for (const g of p.grabs) held[g.i] = 1;
+    const kE = .55 - .4 * P.soft, kV = .85 - .3 * P.soft, wa = W.wa, wb = W.wb;
     for (let it = 0; it < ITER; it++) {
       const fwd = !(it & 1);
-      for (let n = 0; n < E; n++) {
-        const e = fwd ? n : E - 1 - n, a = 3 * ea[e], b = 3 * eb[e];
-        const dx = X[b] - X[a], dy = X[b + 1] - X[a + 1], dz = X[b + 2] - X[a + 2];
-        const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
-        if (d < 1e-7) continue;
-        const c = (d - er[e]) / d * .5 * kE;
-        X[a] += dx * c; X[a + 1] += dy * c; X[a + 2] += dz * c;
-        X[b] -= dx * c; X[b + 1] -= dy * c; X[b + 2] -= dz * c;
-      }
       for (let n = 0; n < NT; n++) {                  // clay keeps its volume
         const t = fwd ? n : NT - 1 - n;
         const a = 3 * tn[4 * t], b = 3 * tn[4 * t + 1], c = 3 * tn[4 * t + 2], d = 3 * tn[4 * t + 3];
+        q4[0] = a; q4[1] = b; q4[2] = c; q4[3] = d;
+        for (let k = 0; k < 6; k++) {               // hold the shape this cell remembers
+          const i = q4[EP0[k]], j = q4[EP1[k]];
+          const dx = X[j] - X[i], dy = X[j + 1] - X[i + 1], dz = X[j + 2] - X[i + 2];
+          const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
+          if (len < 1e-7) continue;
+          const cc = (len - tL[6 * t + k]) / len * .5 * kE;
+          X[i] += dx * cc; X[i + 1] += dy * cc; X[i + 2] += dz * cc;
+          X[j] -= dx * cc; X[j + 1] -= dy * cc; X[j + 2] -= dz * cc;
+        }
         const x1 = X[b] - X[a], y1 = X[b + 1] - X[a + 1], z1 = X[b + 2] - X[a + 2];
         const x2 = X[c] - X[a], y2 = X[c + 1] - X[a + 1], z2 = X[c + 2] - X[a + 2];
         const x3 = X[d] - X[a], y3 = X[d + 1] - X[a + 1], z3 = X[d + 2] - X[a + 2];
@@ -675,8 +692,10 @@ input[type="range"]::-moz-range-thumb {
       }
       for (let o = 0; o < 3 * N; o += 3) {
         if (X[o + 1] < 0) X[o + 1] = 0;
-        if (X[o + 1] < .003) {                        // the floor grips: whatever touches it resists sliding
-          X[o] = PX[o] + (X[o] - PX[o]) * grip; X[o + 2] = PX[o + 2] + (X[o + 2] - PX[o + 2]) * grip;
+        if (X[o + 1] < .003 && !held[o / 3]) {        // floor friction: holds still until pulled hard enough, then slides
+          const dx = X[o] - PX[o], dz = X[o + 2] - PX[o + 2], d = Math.sqrt(dx * dx + dz * dz);
+          if (d <= grip) { X[o] = PX[o]; X[o + 2] = PX[o + 2]; }
+          else { const k = grip / d; X[o] -= dx * k; X[o + 2] -= dz * k; }
         }
         const r2 = X[o] * X[o] + X[o + 2] * X[o + 2];
         if (r2 > BOARD * BOARD) { const k = BOARD / Math.sqrt(r2); X[o] *= k; X[o + 2] *= k; }
@@ -691,17 +710,30 @@ input[type="range"]::-moz-range-thumb {
     }
 
     // clay remembers where you left it; rubber remembers where it started
-    const m = P.mem, rate = .04 * (1 - m), ret = .03 * m * m;
-    for (let e = 0; e < E; e++) {
-      const a = 3 * ea[e], b = 3 * eb[e];
-      const dx = X[b] - X[a], dy = X[b + 1] - X[a + 1], dz = X[b + 2] - X[a + 2];
-      const cur = Math.sqrt(dx * dx + dy * dy + dz * dz);
-      let r = er[e];
-      const hi = r * (1 + YIELD), lo = r * (1 - YIELD);
-      if (cur > hi) r += (cur - hi) * rate; else if (cur < lo) r += (cur - lo) * rate;
-      r += (er0[e] - r) * ret;
-      const r0 = er0[e];
-      er[e] = r < r0 * RMIN ? r0 * RMIN : r > r0 * RMAX ? r0 * RMAX : r;
+    const m = P.mem, rate = .07 * (1 - m), ret = .03 * m * m;
+    const Y2 = 2 * YIELD;
+    for (let t = 0; t < NT; t++) {
+      const v = tetVol(tn[4 * t], tn[4 * t + 1], tn[4 * t + 2], tn[4 * t + 3]), v0 = tv[t];
+      if (v0 < SLIVER || v < .65 * v0 || v > 1.5 * v0) continue;                   // skip surface slivers; never memorise a crushed or flipped cell
+      const s2 = Math.pow(v0 / v, 2 / 3), o = 6 * t;
+      let dev = 0;
+      for (let k = 0; k < 6; k++) {
+        const a = 3 * tn[4 * t + EP0[k]], b = 3 * tn[4 * t + EP1[k]];
+        const dx = X[b] - X[a], dy = X[b + 1] - X[a + 1], dz = X[b + 2] - X[a + 2];
+        l2[k] = (dx * dx + dy * dy + dz * dz) * s2;
+        const e = Math.abs(l2[k] - tL2[o + k]) / tL2[o + k];
+        if (e > dev) dev = e;
+      }
+      const flow = dev > Y2 ? rate * (1 - Y2 / dev) : 0;
+      if (!flow && !ret) continue;
+      for (let k = 0; k < 6; k++) {
+        let r = tL2[o + k];
+        r += (l2[k] - r) * flow;
+        const r0 = tL20[o + k];
+        r += (r0 - r) * ret;
+        r = r < r0 * RMIN * RMIN ? r0 * RMIN * RMIN : r > r0 * RMAX * RMAX ? r0 * RMAX * RMAX : r;
+        tL2[o + k] = r; tL[o + k] = Math.sqrt(r);
+      }
     }
     for (let n = wa.length - 1; n >= 0; n--) {
       const a = 3 * wa[n], b = 3 * wb[n];
@@ -712,7 +744,7 @@ input[type="range"]::-moz-range-thumb {
     if (resetT > 0) {
       resetT--;
       for (let o = 0; o < 3 * N; o++) { const d = (HX[o] - X[o]) * .1; X[o] += d; PX[o] += d; }
-      for (let e = 0; e < E; e++) er[e] += (er0[e] - er[e]) * .2;
+      for (let k = 0; k < 6 * NT; k++) { tL2[k] += (tL20[k] - tL2[k]) * .2; tL[k] = Math.sqrt(tL2[k]); }
     }
 
     let moved = 0;
@@ -733,26 +765,25 @@ input[type="range"]::-moz-range-thumb {
   const target = new T3.Vector3(0, .05, .02);
   let needRender = true;
 
-  scene.add(new T3.HemisphereLight(0xffffff, 0x8a8a8a, .55));
-  const key = new T3.DirectionalLight(0xffffff, 2.9);
+  scene.add(new T3.HemisphereLight(0xffffff, 0x9a9a9a, 1.25));
+  const key = new T3.DirectionalLight(0xffffff, 2.1);
   key.position.set(-1.1, 2.4, 1.0);
   key.castShadow = true;
   key.shadow.mapSize.set(2048, 2048);
   Object.assign(key.shadow.camera, { left: -1.2, right: 1.2, top: 1.2, bottom: -1.2, near: .5, far: 6 });
-  key.shadow.bias = -.0004; key.shadow.normalBias = .004; key.shadow.radius = 5;
+  key.shadow.bias = -.0004; key.shadow.normalBias = .01; key.shadow.radius = 6;
   scene.add(key);
+  const fill = new T3.DirectionalLight(0xffffff, .45); fill.position.set(1.6, .9, -.6); scene.add(fill);
 
   // flat background: the floor only shows the shadow
-  const floor = new T3.Mesh(new T3.PlaneGeometry(40, 40).rotateX(-Math.PI / 2), new T3.ShadowMaterial({ opacity: .2 }));
+  const floor = new T3.Mesh(new T3.PlaneGeometry(40, 40).rotateX(-Math.PI / 2), new T3.ShadowMaterial({ opacity: .26 }));
   floor.receiveShadow = true;
   scene.add(floor);
 
-  // cartoon look: three flat tones, an ink outline, and a face drawn by maths rather than pixels
-  const ramp = new T3.DataTexture(new Uint8Array([168, 168, 168, 255, 224, 224, 224, 255, 255, 255, 255, 255]), 3, 1);
-  ramp.minFilter = ramp.magFilter = T3.NearestFilter; ramp.needsUpdate = true;
-  const SHADES = ['#ffffff', '#9a9a98', '#2b2b2b'];
+  // matte clay; the face is drawn by maths in the shader, so nothing smears when the clay stretches
+  const SHADES = ['#e6e5e0', '#8d8d8a', '#2b2b2b'];
   const faceU = { uFace: { value: 0 }, uInk: { value: new T3.Color('#111111') } };
-  const guyMat = new T3.MeshToonMaterial({ color: SHADES[0], gradientMap: ramp });
+  const guyMat = new T3.MeshStandardMaterial({ color: SHADES[0], roughness: .95, metalness: 0 });
   guyMat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, faceU);
     sh.vertexShader = sh.vertexShader
@@ -779,11 +810,7 @@ input[type="range"]::-moz-range-thumb {
           diffuseColor.rgb = mix(diffuseColor.rgb, uInk, m);
         }`);
   };
-  const shadeMats = SHADES.map(c => new T3.MeshToonMaterial({ color: c, gradientMap: ramp }));
-  const outlineMat = new T3.MeshBasicMaterial({ color: '#111111', side: T3.BackSide });
-  outlineMat.onBeforeCompile = sh => {
-    sh.vertexShader = sh.vertexShader.replace('#include <begin_vertex>', 'vec3 transformed = position + normalize(normal) * .0055;');
-  };
+  const shadeMats = SHADES.map(c => new T3.MeshStandardMaterial({ color: c, roughness: .95, metalness: 0 }));
   const allMats = [guyMat, ...shadeMats];
   function paintFace(state) {
     faceU.uFace.value = state === 'held' ? 1 : state === 'asleep' ? 2 : 0;
@@ -792,8 +819,6 @@ input[type="range"]::-moz-range-thumb {
   function applyClay() {
     guyMat.color.set(P.dark ? SHADES[2] : SHADES[0]);
     faceU.uInk.value.set(P.dark ? '#f4f4f4' : '#111111');
-    const darkRoom = readColors.dark;
-    outlineMat.color.set(P.dark && darkRoom ? '#f4f4f4' : '#111111');
     needRender = true;
   }
 
@@ -920,7 +945,7 @@ input[type="range"]::-moz-range-thumb {
         p.mode = tool;
         if (tool === 'pull') {
           p.c.copy(hit.point);
-          p.plane = new T3.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(tmpV).clone(), hit.point);
+          p.plane = new T3.Plane().setFromNormalAndCoplanarPoint(new T3.Vector3(0, 1, 0), hit.point);
           p.grabs = [];
           for (let i = 0; i < N; i++) {
             const ox = X[3 * i] - hit.point.x, oy = X[3 * i + 1] - hit.point.y, oz = X[3 * i + 2] - hit.point.z, d2 = ox * ox + oy * oy + oz * oz;
@@ -950,9 +975,6 @@ input[type="range"]::-moz-range-thumb {
       if (others.length) {                              // two fingers on the background: zoom
         const o = others[0], before = Math.hypot(p.sx - o.sx, p.sy - o.sy), after = Math.hypot(e.clientX - o.sx, e.clientY - o.sy);
         if (before > 1) cam.zoom = Math.min(1.9, Math.max(.5, cam.zoom * before / after));
-      } else {
-        cam.az -= (e.clientX - p.sx) * .006;
-        cam.pol = Math.min(1.4, Math.max(.08, cam.pol - (e.clientY - p.sy) * .005));
       }
       p.sx = e.clientX; p.sy = e.clientY;
       placeCamera();
@@ -963,10 +985,11 @@ input[type="range"]::-moz-range-thumb {
     wake();
     if (p.mode === 'press') {
       const t = (p.c.y - ray.ray.origin.y) / ray.ray.direction.y;
-      if (t > 0) { p.c.x = ray.ray.origin.x + ray.ray.direction.x * t; p.c.z = ray.ray.origin.z + ray.ray.direction.z * t; }
+      if (t > 0) { p.t = p.t || p.c.clone(); p.t.x = ray.ray.origin.x + ray.ray.direction.x * t; p.t.z = ray.ray.origin.z + ray.ray.direction.z * t; }
     } else if (ray.ray.intersectPlane(p.plane, tmpV)) {
-      p.c.copy(tmpV);
-      if (p.c.y < 0) p.c.y = 0; else if (p.c.y > 1.1) p.c.y = 1.1;
+      p.t = p.t || new T3.Vector3();
+      p.t.copy(tmpV);
+      if (p.t.y < 0) p.t.y = 0; else if (p.t.y > 1.1) p.t.y = 1.1;
     }
   });
   function release(id, cancelled) {
@@ -1009,7 +1032,7 @@ input[type="range"]::-moz-range-thumb {
     $('tool-add').hidden = !create; $('palette').hidden = !create; $('clay-btn').hidden = create;
     $('reset-btn').textContent = create ? 'Clear' : 'Reset';
     setTool(create ? 'add' : 'pull');
-    say(create ? 'Drag on the board to lay down clay. Pieces stick where they touch.' : 'Drag the guy to shape him. Drag the background to look around.');
+    say(create ? 'Drag on the board to lay down clay. Pieces stick where they touch.' : 'Drag the guy to shape him.');
     resetT = 0; wake(); needRender = true;
   }
   for (const b of document.querySelectorAll('.modes button')) b.addEventListener('click', () => setMode(b.dataset.mode));

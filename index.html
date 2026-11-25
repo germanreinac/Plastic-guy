@@ -62,6 +62,8 @@ body {
   pointer-events: none;
 }
 .top > * { pointer-events: auto; }
+.top { align-items: flex-start; }
+.left { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding-top: 8px; }
 .mark {
   margin: 0;
   font: 700 17px/1 var(--display);
@@ -86,16 +88,32 @@ button[aria-pressed="true"], button[aria-expanded="true"], button[aria-checked="
 @media (hover: hover) { button:hover { background: var(--fg); color: var(--bg); } }
 :focus-visible { outline: 2px solid var(--fg); outline-offset: 3px; }
 
-.tools {
-  position: fixed; left: 50%; transform: translateX(-50%);
-  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+.seg {
   display: flex;
   border: 1px solid var(--fg);
   border-radius: 999px;
   background: var(--bg);
   padding: 3px; gap: 2px;
 }
-.tools button { border-color: transparent; padding: 9px 16px; }
+.seg button { border-color: transparent; padding: 9px 16px; }
+.modes button { padding: 7px 12px; }
+.tools {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+}
+#palette {
+  position: fixed; left: 50%; transform: translateX(-50%);
+  bottom: calc(70px + env(safe-area-inset-bottom, 0px));
+  display: flex; align-items: center; gap: 10px;
+}
+.swatch, .swatch:hover, .swatch[aria-pressed="true"] {
+  width: 28px; height: 28px; padding: 0;
+  background: var(--c);
+  border: 1px solid var(--fg);
+}
+.swatch[aria-pressed="true"] { outline: 2px solid var(--fg); outline-offset: 2px; }
+#undo-btn { margin-left: 6px; }
+body.create #hint { bottom: calc(116px + env(safe-area-inset-bottom, 0px)); }
 
 #hint {
   position: fixed; left: 0; right: 0;
@@ -111,7 +129,7 @@ button[aria-pressed="true"], button[aria-expanded="true"], button[aria-checked="
 
 #panel {
   position: fixed;
-  top: calc(58px + env(safe-area-inset-top, 0px));
+  top: calc(66px + env(safe-area-inset-top, 0px));
   right: var(--gr);
   width: min(236px, calc(100vw - 32px));
   box-sizing: border-box;
@@ -152,8 +170,14 @@ input[type="range"]::-moz-range-thumb {
 <canvas id="stage" aria-label="A clay figure lying on a board. Drag it to deform it; drag the background to look around."></canvas>
 
 <header class="top">
-  <h1 class="mark">plastic guy</h1>
-  <div class="actions">
+  <div class="left">
+    <h1 class="mark">plastic guy</h1>
+    <div class="seg modes" role="radiogroup" aria-label="Mode">
+      <button type="button" role="radio" aria-checked="true" data-mode="toy" id="mode-toy">Toy</button>
+      <button type="button" role="radio" aria-checked="false" data-mode="create" id="mode-create">Create</button>
+    </div>
+  </div>
+  <div class="actions" style="padding-top:8px">
     <button id="tune-btn" type="button" aria-expanded="false" aria-controls="panel">Tune</button>
     <button id="reset-btn" type="button">Reset</button>
   </div>
@@ -191,7 +215,15 @@ input[type="range"]::-moz-range-thumb {
 
 <p id="hint">Drag the guy to shape him. Drag the background to look around.</p>
 
-<nav class="tools" role="radiogroup" aria-label="Tool">
+<div id="palette" hidden>
+  <button type="button" class="swatch" style="--c:#d8d7d2" data-shade="0" id="shade-0" aria-pressed="true" aria-label="White clay"></button>
+  <button type="button" class="swatch" style="--c:#7f7f7c" data-shade="1" id="shade-1" aria-pressed="false" aria-label="Grey clay"></button>
+  <button type="button" class="swatch" style="--c:#262626" data-shade="2" id="shade-2" aria-pressed="false" aria-label="Black clay"></button>
+  <button type="button" id="undo-btn">Undo</button>
+</div>
+
+<nav class="seg tools" role="radiogroup" aria-label="Tool">
+  <button type="button" role="radio" aria-checked="false" data-tool="add" id="tool-add" hidden>Add</button>
   <button type="button" role="radio" aria-checked="true" data-tool="pull" id="tool-pull">Pull</button>
   <button type="button" role="radio" aria-checked="false" data-tool="press" id="tool-press">Press</button>
   <button type="button" role="radio" aria-checked="false" data-tool="pinch" id="tool-pinch">Pinch</button>
@@ -208,12 +240,14 @@ input[type="range"]::-moz-range-thumb {
 
   // ---------- settings ----------
   const P = { soft: .4, mem: .1, slide: .3, finger: .4, mesh: false, dark: false };
-  let tool = 'pull';
+  let mode = 'toy', tool = 'pull', shade = 0;
   const H = .028;                       // spacing of the simulation lattice
   const ITER = 4, YIELD = .08, RMIN = .3, RMAX = 3.5;
   const GRAV = 6 / (120 * 120), DC = H * .85, BOARD = .93;
+  const WELD = DC * 1.03, WELD_BREAK = WELD * 2.4;       // clay sticks on contact, tears off if yanked
+  const CAPN = 12000, CAPE = 80000, CAPT = 56000, MAXN = 9000;
 
-  // ---------- the guy, as a signed distance field (about 1 unit long, lying on y = 0) ----------
+  // ---------- shapes as signed distance fields (lying on y = 0) ----------
   const cap = (x, y, z, ax, ay, az, bx, by, bz, r) => {
     const vx = bx - ax, vy = by - ay, vz = bz - az, wx = x - ax, wy = y - ay, wz = z - az;
     let t = (wx * vx + wy * vy + wz * vz) / (vx * vx + vy * vy + vz * vz);
@@ -223,54 +257,125 @@ input[type="range"]::-moz-range-thumb {
   };
   const sph = (x, y, z, ax, ay, az, r) => { const dx = x - ax, dy = y - ay, dz = z - az; return Math.sqrt(dx * dx + dy * dy + dz * dz) - r; };
   const smin = (a, b, k) => { const h = Math.max(k - Math.abs(a - b), 0) / k; return Math.min(a, b) - h * h * k * .25; };
-  function sdf(x, y, z) {
-    const K = .045;
-    let d = sph(x, y, z, 0, .105, -.345, .105);                              // head
-    d = smin(d, cap(x, y, z, 0, .1, -.17, 0, .1, .06, .1), K);               // chest
-    d = smin(d, sph(x, y, z, 0, .112, .035, .115), K);                       // belly
-    d = smin(d, cap(x, y, z, -.07, .07, -.17, -.33, .045, -.25, .043), K);   // arm, flung up
-    d = smin(d, sph(x, y, z, -.35, .055, -.258, .055), K);
-    d = smin(d, cap(x, y, z, .07, .07, -.17, .34, .045, -.06, .043), K);     // arm, flopped out
-    d = smin(d, sph(x, y, z, .36, .055, -.05, .055), K);
-    d = smin(d, cap(x, y, z, -.05, .075, .09, -.15, .056, .4, .055), K);     // legs
-    d = smin(d, sph(x, y, z, -.165, .066, .42, .066), K);
-    d = smin(d, cap(x, y, z, .05, .075, .09, .19, .056, .37, .055), K);
-    d = smin(d, sph(x, y, z, .205, .066, .385, .066), K);
-    d += .0035 * Math.sin(31 * x + 1.3) * Math.sin(27 * z + .4) * Math.sin(23 * y + 2.1);  // hand-rolled lumps
-    return Math.max(d, -y);                                                  // flat where it meets the board
+  const lumps = (x, y, z) => .0035 * Math.sin(31 * x + 1.3) * Math.sin(27 * z + .4) * Math.sin(23 * y + 2.1);  // hand-rolled look
+
+  const guyField = {
+    min: [-.5, 0, -.5], max: [.5, .26, .54], incl: 0,
+    sdf(x, y, z) {
+      const K = .045;
+      let d = sph(x, y, z, 0, .105, -.345, .105);                              // head
+      d = smin(d, cap(x, y, z, 0, .1, -.17, 0, .1, .06, .1), K);               // chest
+      d = smin(d, sph(x, y, z, 0, .112, .035, .115), K);                       // belly
+      d = smin(d, cap(x, y, z, -.07, .07, -.17, -.33, .045, -.25, .043), K);   // arm, flung up
+      d = smin(d, sph(x, y, z, -.35, .055, -.258, .055), K);
+      d = smin(d, cap(x, y, z, .07, .07, -.17, .34, .045, -.06, .043), K);     // arm, flopped out
+      d = smin(d, sph(x, y, z, .36, .055, -.05, .055), K);
+      d = smin(d, cap(x, y, z, -.05, .075, .09, -.15, .056, .4, .055), K);     // legs
+      d = smin(d, sph(x, y, z, -.165, .066, .42, .066), K);
+      d = smin(d, cap(x, y, z, .05, .075, .09, .19, .056, .37, .055), K);
+      d = smin(d, sph(x, y, z, .205, .066, .385, .066), K);
+      return Math.max(d + lumps(x, y, z), -y);                                 // flat where it meets the board
+    },
+  };
+
+  // a finger stroke becomes a rope of clay; segments are bucketed so the field stays cheap to sample
+  function strokeField(path, r) {
+    const B = .08, PAD = .03, buckets = new Map(), segs = [];
+    const pts = path.length > 1 ? path : [path[0], path[0].clone().add(new T3.Vector3(.002, 0, 0))];
+    const min = [1e9, 1e9, 1e9], max = [-1e9, -1e9, -1e9];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1], s = [a.x, a.y, a.z, b.x, b.y, b.z];
+      segs.push(s);
+      const m = r + PAD;
+      for (let bi = Math.floor((Math.min(a.x, b.x) - m) / B); bi <= Math.floor((Math.max(a.x, b.x) + m) / B); bi++)
+        for (let bk = Math.floor((Math.min(a.z, b.z) - m) / B); bk <= Math.floor((Math.max(a.z, b.z) + m) / B); bk++) {
+          const k = (bi + 2048) * 4096 + bk + 2048;
+          if (!buckets.has(k)) buckets.set(k, []);
+          buckets.get(k).push(s);
+        }
+      for (const q of [a, b]) {
+        min[0] = Math.min(min[0], q.x); min[1] = Math.min(min[1], q.y); min[2] = Math.min(min[2], q.z);
+        max[0] = Math.max(max[0], q.x); max[1] = Math.max(max[1], q.y); max[2] = Math.max(max[2], q.z);
+      }
+    }
+    const e = r + .012;
+    return {
+      min: [min[0] - e, Math.max(0, min[1] - e), min[2] - e], max: [max[0] + e, max[1] + e, max[2] + e], incl: .25 * H,
+      sdf(x, y, z) {
+        const l = buckets.get((Math.floor(x / B) + 2048) * 4096 + Math.floor(z / B) + 2048);
+        let d = PAD;
+        if (l) for (const s of l) { const c = cap(x, y, z, s[0], s[1], s[2], s[3], s[4], s[5], r); if (c < d) d = c; }
+        return Math.max(d + lumps(x, y, z), -y);
+      },
+    };
   }
 
-  // ---------- simulation mesh: tetrahedra on a lattice ----------
-  let N = 0, X, PX, HX, LI;             // node positions, previous, home, lattice coords
-  let E = 0, ea, eb, er, er0;           // edges with plastic rest lengths
-  let NT = 0, tn, tv;                   // tets (4 nodes each) and rest volumes
-  let cubeTet, ncx, ncy, ncz;
-  const LMIN = [-.5, 0, -.5];
+  // ---------- worlds: the toy and the creative board each keep their own clay ----------
+  const newWorld = () => ({
+    N: 0, E: 0, NT: 0,
+    X: new Float32Array(3 * CAPN), PX: new Float32Array(3 * CAPN), HX: new Float32Array(3 * CAPN),
+    LI: new Int16Array(3 * CAPN), PI: new Uint16Array(CAPN),
+    ea: new Uint32Array(CAPE), eb: new Uint32Array(CAPE), er: new Float32Array(CAPE), er0: new Float32Array(CAPE),
+    tn: new Uint32Array(4 * CAPT), tv: new Float32Array(CAPT),
+    pieces: [], wa: [], wb: [], wkey: new Set(), wcnt: new Uint8Array(CAPN),
+  });
+  const worlds = { toy: newWorld(), create: newWorld() };
+  let W, N = 0, E = 0, NT = 0, X, PX, HX, LI, PI, ea, eb, er, er0, tn, tv;
+  function useWorld(w) { W = w; ({ N, E, NT, X, PX, HX, LI, PI, ea, eb, er, er0, tn, tv } = w); }
+  function saveCounts() { W.N = N; W.E = E; W.NT = NT; }
+  useWorld(worlds.toy);
 
-  function buildSim() {
-    ncx = Math.ceil(1 / H); ncy = Math.ceil(.26 / H); ncz = Math.ceil(1.04 / H);
-    const sx = ncx + 1, sy = ncy + 1, sz = ncz + 1;
-    const nid = new Int32Array(sx * sy * sz).fill(-1);
-    const xs = [], li = [];
+  function tetVol(a, b, c, d) {
+    a *= 3; b *= 3; c *= 3; d *= 3;
+    const x1 = X[b] - X[a], y1 = X[b + 1] - X[a + 1], z1 = X[b + 2] - X[a + 2];
+    const x2 = X[c] - X[a], y2 = X[c + 1] - X[a + 1], z2 = X[c + 2] - X[a + 2];
+    const x3 = X[d] - X[a], y3 = X[d + 1] - X[a + 1], z3 = X[d + 2] - X[a + 2];
+    return ((y1 * z2 - z1 * y2) * x3 + (z1 * x2 - x1 * z2) * y3 + (x1 * y2 - y1 * x2) * z3) / 6;
+  }
+  function bary(t, qx, qy, qz, w) {
+    const a = 3 * tn[4 * t], b = 3 * tn[4 * t + 1], c = 3 * tn[4 * t + 2], d = 3 * tn[4 * t + 3];
+    const x1 = X[b] - X[a], y1 = X[b + 1] - X[a + 1], z1 = X[b + 2] - X[a + 2];
+    const x2 = X[c] - X[a], y2 = X[c + 1] - X[a + 1], z2 = X[c + 2] - X[a + 2];
+    const x3 = X[d] - X[a], y3 = X[d + 1] - X[a + 1], z3 = X[d + 2] - X[a + 2];
+    const px = qx - X[a], py = qy - X[a + 1], pz = qz - X[a + 2];
+    const det = (y1 * z2 - z1 * y2) * x3 + (z1 * x2 - x1 * z2) * y3 + (x1 * y2 - y1 * x2) * z3;
+    w[1] = ((y2 * z3 - z2 * y3) * px + (z2 * x3 - x2 * z3) * py + (x2 * y3 - y2 * x3) * pz) / det;
+    w[2] = ((y3 * z1 - z3 * y1) * px + (z3 * x1 - x3 * z1) * py + (x3 * y1 - y3 * x1) * pz) / det;
+    w[3] = ((y1 * z2 - z1 * y2) * px + (z1 * x2 - x1 * z2) * py + (x1 * y2 - y1 * x2) * pz) / det;
+    w[0] = 1 - w[1] - w[2] - w[3];
+  }
+
+  // Turn a field into a piece of clay: tetrahedra on a lattice for the physics,
+  // and a smooth surface-nets skin bound to those tetrahedra for the eye.
+  function buildPiece(f, material) {
+    const n0 = N, e0 = E, t0 = NT, sdf = f.sdf, pid = W.pieces.length;
+    const fail = () => { N = n0; E = e0; NT = t0; return null; };
+    const L0 = [Math.floor(f.min[0] / H) * H, Math.max(0, Math.floor(f.min[1] / H) * H), Math.floor(f.min[2] / H) * H];
+    const ncx = Math.max(1, Math.ceil((f.max[0] - L0[0]) / H)), ncy = Math.max(1, Math.ceil((f.max[1] - L0[1]) / H)), ncz = Math.max(1, Math.ceil((f.max[2] - L0[2]) / H));
+    const sx = ncx + 1, sy = ncy + 1;
+    const nid = new Int32Array(sx * sy * (ncz + 1)).fill(-1);
     const node = (i, j, k) => {
       const q = i + sx * (j + sy * k);
-      if (nid[q] < 0) { nid[q] = xs.length / 3; xs.push(LMIN[0] + i * H, LMIN[1] + j * H, LMIN[2] + k * H); li.push(i, j, k); }
+      if (nid[q] < 0) {
+        if (N >= CAPN) return -1;
+        nid[q] = N; X[3 * N] = L0[0] + i * H; X[3 * N + 1] = L0[1] + j * H; X[3 * N + 2] = L0[2] + k * H;
+        LI[3 * N] = i; LI[3 * N + 1] = j; LI[3 * N + 2] = k; PI[N] = pid; W.wcnt[N] = 0; N++;
+      }
       return nid[q];
     };
-    cubeTet = new Int32Array(ncx * ncy * ncz).fill(-1);
+    const cubeTet = new Int32Array(ncx * ncy * ncz).fill(-1);
     const KUHN = [[0, 1, 3, 7], [0, 1, 5, 7], [0, 2, 3, 7], [0, 2, 6, 7], [0, 4, 5, 7], [0, 4, 6, 7]];
-    const tets = [];
+    const c8 = new Int32Array(8);
     for (let k = 0; k < ncz; k++) for (let j = 0; j < ncy; j++) for (let i = 0; i < ncx; i++) {
-      if (sdf(LMIN[0] + (i + .5) * H, LMIN[1] + (j + .5) * H, LMIN[2] + (k + .5) * H) >= 0) continue;
-      const c = [];
-      for (let b = 0; b < 8; b++) c.push(node(i + (b & 1), j + ((b >> 1) & 1), k + ((b >> 2) & 1)));
-      cubeTet[i + ncx * (j + ncy * k)] = tets.length / 4;
-      for (const t of KUHN) tets.push(c[t[0]], c[t[1]], c[t[2]], c[t[3]]);
+      if (sdf(L0[0] + (i + .5) * H, L0[1] + (j + .5) * H, L0[2] + (k + .5) * H) >= f.incl) continue;
+      if (NT + 6 > CAPT) return fail();
+      for (let b = 0; b < 8; b++) { c8[b] = node(i + (b & 1), j + ((b >> 1) & 1), k + ((b >> 2) & 1)); if (c8[b] < 0) return fail(); }
+      cubeTet[i + ncx * (j + ncy * k)] = NT;
+      for (const t of KUHN) { tn[4 * NT] = c8[t[0]]; tn[4 * NT + 1] = c8[t[1]]; tn[4 * NT + 2] = c8[t[2]]; tn[4 * NT + 3] = c8[t[3]]; NT++; }
     }
-    N = xs.length / 3;
-    X = Float32Array.from(xs); LI = Int16Array.from(li);
+    if (NT === t0) return fail();
     // pull stray lattice corners onto the real surface
-    for (let i = 0; i < N; i++) {
+    for (let i = n0; i < N; i++) {
       const o = 3 * i;
       for (let n = 0; n < 4; n++) {
         const d = sdf(X[o], X[o + 1], X[o + 2]);
@@ -284,42 +389,29 @@ input[type="range"]::-moz-range-thumb {
         if (X[o + 1] < 0) X[o + 1] = 0;
       }
     }
-    PX = Float32Array.from(X); HX = Float32Array.from(X);
-    NT = tets.length / 4; tn = Uint16Array.from(tets); tv = new Float32Array(NT);
-    for (let t = 0; t < NT; t++) {
+    for (let o = 3 * n0; o < 3 * N; o++) PX[o] = HX[o] = X[o];
+    for (let t = t0; t < NT; t++) {
       let v = tetVol(tn[4 * t], tn[4 * t + 1], tn[4 * t + 2], tn[4 * t + 3]);
       if (v < 0) { const s = tn[4 * t + 1]; tn[4 * t + 1] = tn[4 * t + 2]; tn[4 * t + 2] = s; v = -v; }
       tv[t] = v;
     }
     const set = new Set();
     const PAIRS = [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]];
-    for (let t = 0; t < NT; t++) for (const [p, q] of PAIRS) {
+    for (let t = t0; t < NT; t++) for (const [p, q] of PAIRS) {
       const a = tn[4 * t + p], b = tn[4 * t + q];
-      set.add(a < b ? a * N + b : b * N + a);
+      set.add(a < b ? a * CAPN + b : b * CAPN + a);
     }
-    E = set.size; ea = new Uint16Array(E); eb = new Uint16Array(E); er = new Float32Array(E); er0 = new Float32Array(E);
-    let n = 0;
+    if (E + set.size > CAPE) return fail();
     for (const key of set) {
-      const a = Math.floor(key / N), b = key % N;
-      ea[n] = a; eb[n] = b;
-      er0[n] = er[n] = Math.hypot(X[3 * b] - X[3 * a], X[3 * b + 1] - X[3 * a + 1], X[3 * b + 2] - X[3 * a + 2]);
-      n++;
+      const a = Math.floor(key / CAPN), b = key % CAPN;
+      ea[E] = a; eb[E] = b;
+      er0[E] = er[E] = Math.hypot(X[3 * b] - X[3 * a], X[3 * b + 1] - X[3 * a + 1], X[3 * b + 2] - X[3 * a + 2]);
+      E++;
     }
-  }
-  function tetVol(a, b, c, d) {
-    a *= 3; b *= 3; c *= 3; d *= 3;
-    const x1 = X[b] - X[a], y1 = X[b + 1] - X[a + 1], z1 = X[b + 2] - X[a + 2];
-    const x2 = X[c] - X[a], y2 = X[c + 1] - X[a + 1], z2 = X[c + 2] - X[a + 2];
-    const x3 = X[d] - X[a], y3 = X[d + 1] - X[a + 1], z3 = X[d + 2] - X[a + 2];
-    return ((y1 * z2 - z1 * y2) * x3 + (z1 * x2 - x1 * z2) * y3 + (x1 * y2 - y1 * x2) * z3) / 6;
-  }
 
-  // ---------- visible skin: surface nets over the same field, bound to the tets ----------
-  let SV = 0, skinPos, skinUV, skinIdx, bindN, bindW;
-
-  function buildSkin() {
-    const c = .0085, min = [-.5, -2 * c, -.5];
-    const nx = Math.ceil(1 / c) + 1, ny = Math.ceil(.27 / c) + 1, nz = Math.ceil(1.04 / c) + 1;
+    // ---- skin ----
+    const c = .0085, min = [f.min[0] - 2 * c, f.min[1] - 2 * c, f.min[2] - 2 * c];
+    const nx = Math.ceil((f.max[0] - min[0]) / c) + 3, ny = Math.ceil((f.max[1] - min[1]) / c) + 3, nz = Math.ceil((f.max[2] - min[2]) / c) + 3;
     const val = new Float32Array(nx * ny * nz);
     for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++)
       val[i + nx * (j + ny * k)] = sdf(min[0] + i * c, min[1] + j * c, min[2] + k * c);
@@ -357,10 +449,10 @@ input[type="range"]::-moz-range-thumb {
       if (v0 !== (val[q + nx] < 0)) quad(C(i, j, k), C(i, j, k - 1), C(i - 1, j, k - 1), C(i - 1, j, k), v0);
       if (v0 !== (val[q + nx * ny] < 0)) quad(C(i, j, k), C(i - 1, j, k), C(i - 1, j - 1, k), C(i, j - 1, k), v0);
     }
-    SV = pos.length / 3;
-    skinPos = Float32Array.from(pos); skinIdx = Uint32Array.from(idx);
-    // make sure faces point outward
-    {
+    const SV = pos.length / 3;
+    if (!SV || !idx.length) return fail();
+    const skinPos = Float32Array.from(pos), skinIdx = Uint32Array.from(idx);
+    {   // make sure faces point outward
       const a = 3 * idx[0], b = 3 * idx[1], d = 3 * idx[2];
       const ux = pos[b] - pos[a], uy = pos[b + 1] - pos[a + 1], uz = pos[b + 2] - pos[a + 2];
       const vx = pos[d] - pos[a], vy = pos[d + 1] - pos[a + 1], vz = pos[d + 2] - pos[a + 2];
@@ -371,58 +463,75 @@ input[type="range"]::-moz-range-thumb {
         for (let t = 0; t < skinIdx.length; t += 3) { const s = skinIdx[t + 1]; skinIdx[t + 1] = skinIdx[t + 2]; skinIdx[t + 2] = s; }
     }
     // top-down projection for the painted face and the surface grain
-    skinUV = new Float32Array(SV * 2);
+    const skinUV = new Float32Array(SV * 2);
     for (let v = 0; v < SV; v++) { skinUV[2 * v] = (pos[3 * v] + .55) / 1.1; skinUV[2 * v + 1] = 1 - (pos[3 * v + 2] + .55) / 1.1; }
-
     // bind every skin vertex to the tet that holds it best
-    bindN = new Uint16Array(SV * 4); bindW = new Float32Array(SV * 4);
+    const bindN = new Uint32Array(SV * 4), bindW = new Float32Array(SV * 4);
     const w = [0, 0, 0, 0], minVol = H * H * H / 6 * .05;
     for (let v = 0; v < SV; v++) {
       const qx = pos[3 * v], qy = pos[3 * v + 1], qz = pos[3 * v + 2];
-      const ci = Math.floor((qx - LMIN[0]) / H), cj = Math.floor((qy - LMIN[1]) / H), ck = Math.floor((qz - LMIN[2]) / H);
+      const ci = Math.floor((qx - L0[0]) / H), cj = Math.floor((qy - L0[1]) / H), ck = Math.floor((qz - L0[2]) / H);
       let best = -1e9, bt = -1;
       for (let reach = 1; reach <= 3 && bt < 0; reach++)
         for (let k = ck - reach; k <= ck + reach; k++) for (let j = cj - reach; j <= cj + reach; j++) for (let i = ci - reach; i <= ci + reach; i++) {
           if (i < 0 || j < 0 || k < 0 || i >= ncx || j >= ncy || k >= ncz) continue;
-          const t0 = cubeTet[i + ncx * (j + ncy * k)];
-          if (t0 < 0) continue;
-          for (let t = t0; t < t0 + 6; t++) {
+          const ct = cubeTet[i + ncx * (j + ncy * k)];
+          if (ct < 0) continue;
+          for (let t = ct; t < ct + 6; t++) {
             if (tv[t] < minVol) continue;
             bary(t, qx, qy, qz, w);
             const s = Math.min(w[0], w[1], w[2], w[3]);
             if (s > best) { best = s; bt = t; }
           }
         }
-      if (bt < 0) bt = 0;
+      if (bt < 0) bt = t0;
       bary(bt, qx, qy, qz, w);
       for (let n = 0; n < 4; n++) { bindN[4 * v + n] = tn[4 * bt + n]; bindW[4 * v + n] = w[n]; }
     }
+
+    const geo = new T3.BufferGeometry();
+    const posAttr = new T3.BufferAttribute(skinPos, 3); posAttr.setUsage(T3.DynamicDrawUsage);
+    geo.setAttribute('position', posAttr);
+    geo.setAttribute('uv', new T3.BufferAttribute(skinUV, 2));
+    geo.setIndex(new T3.BufferAttribute(skinIdx, 1));
+    geo.computeVertexNormals();
+    geo.boundingSphere = new T3.Sphere(new T3.Vector3(), 6);
+    const mesh = new T3.Mesh(geo, material);
+    mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
+    const piece = { n0, e0, t0, SV, skinPos, bindN, bindW, geo, posAttr, mesh };
+    W.pieces.push(piece);
+    scene.add(mesh);
+    return piece;
   }
-  function bary(t, qx, qy, qz, w) {
-    const a = 3 * tn[4 * t], b = 3 * tn[4 * t + 1], c = 3 * tn[4 * t + 2], d = 3 * tn[4 * t + 3];
-    const x1 = X[b] - X[a], y1 = X[b + 1] - X[a + 1], z1 = X[b + 2] - X[a + 2];
-    const x2 = X[c] - X[a], y2 = X[c + 1] - X[a + 1], z2 = X[c + 2] - X[a + 2];
-    const x3 = X[d] - X[a], y3 = X[d + 1] - X[a + 1], z3 = X[d + 2] - X[a + 2];
-    const px = qx - X[a], py = qy - X[a + 1], pz = qz - X[a + 2];
-    const det = (y1 * z2 - z1 * y2) * x3 + (z1 * x2 - x1 * z2) * y3 + (x1 * y2 - y1 * x2) * z3;
-    w[1] = ((y2 * z3 - z2 * y3) * px + (z2 * x3 - x2 * z3) * py + (x2 * y3 - y2 * x3) * pz) / det;
-    w[2] = ((y3 * z1 - z3 * y1) * px + (z3 * x1 - x3 * z1) * py + (x3 * y1 - y3 * x1) * pz) / det;
-    w[3] = ((y1 * z2 - z1 * y2) * px + (z1 * x2 - x1 * z2) * py + (x1 * y2 - y1 * x2) * pz) / det;
-    w[0] = 1 - w[1] - w[2] - w[3];
+
+  function dropPiecesFrom(count) {            // remove the newest pieces down to `count`
+    while (W.pieces.length > count) {
+      const p = W.pieces.pop();
+      scene.remove(p.mesh); p.geo.dispose();
+      N = p.n0; E = p.e0; NT = p.t0;
+    }
+    for (let n = W.wa.length - 1; n >= 0; n--) if (W.wa[n] >= N || W.wb[n] >= N) unweld(n);
+    wake(); needRender = true;
+  }
+  function unweld(n) {
+    const a = W.wa[n], b = W.wb[n];
+    W.wkey.delete(a * CAPN + b); W.wcnt[a]--; W.wcnt[b]--;
+    W.wa[n] = W.wa[W.wa.length - 1]; W.wb[n] = W.wb[W.wb.length - 1]; W.wa.pop(); W.wb.pop();
   }
 
   // ---------- physics: position-based dynamics with plastic flow ----------
   const ptrs = new Map();
   let resetT = 0, calm = 0, asleep = false, lastMoved = 0;
   const SLEEP = 1.5e-4;
-  const HS = 8192, hHead = new Int32Array(HS), pairs = [];
-  let hNext, hCx, hCy, hCz;
+  const HS = 16384, hHead = new Int32Array(HS), pairs = [];
+  const hNext = new Int32Array(CAPN), hCx = new Int32Array(CAPN), hCy = new Int32Array(CAPN), hCz = new Int32Array(CAPN);
   const fingerR = () => .035 + .075 * P.finger;
+  const strokeR = () => .036 + .05 * P.finger;
 
   function findPairs() {
     pairs.length = 0;
     hHead.fill(-1);
-    const inv = 1 / DC;
+    const inv = 1 / DC, wkey = W.wkey, wcnt = W.wcnt;
     for (let i = 0; i < N; i++) {
       const cx = hCx[i] = Math.floor(X[3 * i] * inv), cy = hCy[i] = Math.floor(X[3 * i + 1] * inv), cz = hCz[i] = Math.floor(X[3 * i + 2] * inv);
       const h = ((cx * 73856093) ^ (cy * 19349663) ^ (cz * 83492791)) & (HS - 1);
@@ -431,14 +540,17 @@ input[type="range"]::-moz-range-thumb {
     const d2max = DC * DC;
     for (let i = 0; i < N; i++) {
       const cx = hCx[i], cy = hCy[i], cz = hCz[i], xi = X[3 * i], yi = X[3 * i + 1], zi = X[3 * i + 2];
-      const li = LI[3 * i], lj = LI[3 * i + 1], lk = LI[3 * i + 2];
+      const li = LI[3 * i], lj = LI[3 * i + 1], lk = LI[3 * i + 2], pi = PI[i];
       for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
         const qx = cx + dx, qy = cy + dy, qz = cz + dz;
         for (let j = hHead[((qx * 73856093) ^ (qy * 19349663) ^ (qz * 83492791)) & (HS - 1)]; j >= 0; j = hNext[j]) {
           if (j <= i || hCx[j] !== qx || hCy[j] !== qy || hCz[j] !== qz) continue;
-          if (Math.abs(LI[3 * j] - li) <= 2 && Math.abs(LI[3 * j + 1] - lj) <= 2 && Math.abs(LI[3 * j + 2] - lk) <= 2) continue;  // same piece of clay
+          if (PI[j] === pi && Math.abs(LI[3 * j] - li) <= 2 && Math.abs(LI[3 * j + 1] - lj) <= 2 && Math.abs(LI[3 * j + 2] - lk) <= 2) continue;  // same bit of clay
           const ex = X[3 * j] - xi, ey = X[3 * j + 1] - yi, ez = X[3 * j + 2] - zi;
-          if (ex * ex + ey * ey + ez * ez < d2max) pairs.push(i, j);
+          if (ex * ex + ey * ey + ez * ez >= d2max) continue;
+          pairs.push(i, j);
+          const key = i * CAPN + j;
+          if (wcnt[i] < 4 && wcnt[j] < 4 && !wkey.has(key)) { wkey.add(key); wcnt[i]++; wcnt[j]++; W.wa.push(i); W.wb.push(j); }
         }
       }
     }
@@ -469,7 +581,7 @@ input[type="range"]::-moz-range-thumb {
     }
 
     findPairs();
-    const kE = 1 - .72 * P.soft, kV = .85 - .3 * P.soft;
+    const kE = 1 - .72 * P.soft, kV = .85 - .3 * P.soft, wa = W.wa, wb = W.wb;
     for (let it = 0; it < ITER; it++) {
       const fwd = !(it & 1);
       for (let n = 0; n < E; n++) {
@@ -500,7 +612,7 @@ input[type="range"]::-moz-range-thumb {
         X[c] += g2x * l; X[c + 1] += g2y * l; X[c + 2] += g2z * l;
         X[d] += g3x * l; X[d + 1] += g3y * l; X[d + 2] += g3z * l;
       }
-      for (let n = 0; n < pairs.length; n += 2) {     // limbs rest on the body instead of passing through
+      for (let n = 0; n < pairs.length; n += 2) {     // clay rests on clay instead of passing through
         const a = 3 * pairs[n], b = 3 * pairs[n + 1];
         const dx = X[b] - X[a], dy = X[b + 1] - X[a + 1], dz = X[b + 2] - X[a + 2];
         const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
@@ -508,6 +620,15 @@ input[type="range"]::-moz-range-thumb {
         const c = (DC - d) / d * .5;
         X[a] -= dx * c; X[a + 1] -= dy * c; X[a + 2] -= dz * c;
         X[b] += dx * c; X[b + 1] += dy * c; X[b + 2] += dz * c;
+      }
+      for (let n = 0; n < wa.length; n++) {           // ...and stays stuck where it touched
+        const a = 3 * wa[n], b = 3 * wb[n];
+        const dx = X[b] - X[a], dy = X[b + 1] - X[a + 1], dz = X[b + 2] - X[a + 2];
+        const d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (d <= WELD) continue;
+        const c = (d - WELD) / d * .3;
+        X[a] += dx * c; X[a + 1] += dy * c; X[a + 2] += dz * c;
+        X[b] -= dx * c; X[b + 1] -= dy * c; X[b + 2] -= dz * c;
       }
       for (const p of ptrs.values()) {
         if (p.mode === 'pull') {
@@ -553,6 +674,11 @@ input[type="range"]::-moz-range-thumb {
       const r0 = er0[e];
       er[e] = r < r0 * RMIN ? r0 * RMIN : r > r0 * RMAX ? r0 * RMAX : r;
     }
+    for (let n = wa.length - 1; n >= 0; n--) {
+      const a = 3 * wa[n], b = 3 * wb[n];
+      const dx = X[b] - X[a], dy = X[b + 1] - X[a + 1], dz = X[b + 2] - X[a + 2];
+      if (dx * dx + dy * dy + dz * dz > WELD_BREAK * WELD_BREAK) unweld(n);
+    }
 
     if (resetT > 0) {
       resetT--;
@@ -576,6 +702,7 @@ input[type="range"]::-moz-range-thumb {
   const camera = new T3.PerspectiveCamera(32, 1, .1, 30);
   const cam = { az: .35, pol: .78, zoom: 1, fit: 2.4 };
   const target = new T3.Vector3(0, .05, .02);
+  let needRender = true;
 
   scene.add(new T3.HemisphereLight(0xffffff, 0x8a8a8a, 1.15));
   const key = new T3.DirectionalLight(0xffffff, 2.3);
@@ -590,25 +717,15 @@ input[type="range"]::-moz-range-thumb {
   board.position.y = -.015; board.receiveShadow = true;
   scene.add(board);
 
-  buildSim(); buildSkin();
-  hNext = new Int32Array(N); hCx = new Int32Array(N); hCy = new Int32Array(N); hCz = new Int32Array(N);
-
-  const geo = new T3.BufferGeometry();
-  const posAttr = new T3.BufferAttribute(skinPos, 3); posAttr.setUsage(T3.DynamicDrawUsage);
-  geo.setAttribute('position', posAttr);
-  geo.setAttribute('uv', new T3.BufferAttribute(skinUV, 2));
-  geo.setIndex(new T3.BufferAttribute(skinIdx, 1));
-  geo.computeVertexNormals();
-  geo.boundingSphere = new T3.Sphere(new T3.Vector3(), 6);
-
   // painted face + clay colour live in one texture so they stretch with the clay
   const FS = 2048, faceCv = document.createElement('canvas'); faceCv.width = faceCv.height = FS;
   const faceTex = new T3.CanvasTexture(faceCv); faceTex.colorSpace = T3.SRGBColorSpace; faceTex.anisotropy = 8;
+  const SHADES = ['#d8d7d2', '#7f7f7c', '#262626'];
   let faceState = '';
   function paintFace(state) {
     const key_ = state + P.dark; if (key_ === faceState) return; faceState = key_;
     const g = faceCv.getContext('2d'), u = FS / 1.1, tx = x => (x + .55) * u, tz = z => (z + .55) * u;
-    g.fillStyle = P.dark ? '#262626' : '#d8d7d2'; g.fillRect(0, 0, FS, FS);
+    g.fillStyle = P.dark ? SHADES[2] : SHADES[0]; g.fillRect(0, 0, FS, FS);
     const ink = P.dark ? '#f2f2f2' : '#111111';
     g.fillStyle = ink; g.strokeStyle = ink; g.lineCap = 'round';
     for (const ex of [-.04, .04]) {
@@ -636,28 +753,32 @@ input[type="range"]::-moz-range-thumb {
   }
   const grain = new T3.CanvasTexture(grainCv); grain.wrapS = grain.wrapT = T3.RepeatWrapping; grain.repeat.set(7, 7);
 
-  const clay = new T3.MeshStandardMaterial({ map: faceTex, bumpMap: grain, bumpScale: 1.4, roughness: .86, metalness: 0 });
-  const guy = new T3.Mesh(geo, clay);
-  guy.castShadow = true; guy.receiveShadow = true; guy.frustumCulled = false;
-  scene.add(guy);
+  const guyMat = new T3.MeshStandardMaterial({ map: faceTex, bumpMap: grain, bumpScale: 1.4, roughness: .86, metalness: 0 });
+  const shadeMats = SHADES.map(c => new T3.MeshStandardMaterial({ color: c, bumpMap: grain, bumpScale: 1.4, roughness: .86, metalness: 0 }));
+  const allMats = [guyMat, ...shadeMats];
+
+  buildPiece(guyField, guyMat);
+  saveCounts();
   paintFace('awake');
 
-  const fingerGeo = new T3.SphereGeometry(1, 32, 20);
+  const ballGeo = new T3.SphereGeometry(1, 24, 16);
   const fingerMat = new T3.MeshStandardMaterial({ color: 0x9a9a9a, transparent: true, opacity: .28, roughness: .5, depthWrite: false });
 
   function skin() {
-    for (let v = 0; v < SV; v++) {
-      const q = 4 * v, a = 3 * bindN[q], b = 3 * bindN[q + 1], c = 3 * bindN[q + 2], d = 3 * bindN[q + 3];
-      const wa = bindW[q], wb = bindW[q + 1], wc = bindW[q + 2], wd = bindW[q + 3];
-      skinPos[3 * v] = X[a] * wa + X[b] * wb + X[c] * wc + X[d] * wd;
-      skinPos[3 * v + 1] = X[a + 1] * wa + X[b + 1] * wb + X[c + 1] * wc + X[d + 1] * wd;
-      skinPos[3 * v + 2] = X[a + 2] * wa + X[b + 2] * wb + X[c + 2] * wc + X[d + 2] * wd;
+    for (const p of W.pieces) {
+      const { SV, skinPos, bindN, bindW } = p;
+      for (let v = 0; v < SV; v++) {
+        const q = 4 * v, a = 3 * bindN[q], b = 3 * bindN[q + 1], c = 3 * bindN[q + 2], d = 3 * bindN[q + 3];
+        const wa = bindW[q], wb = bindW[q + 1], wc = bindW[q + 2], wd = bindW[q + 3];
+        skinPos[3 * v] = X[a] * wa + X[b] * wb + X[c] * wc + X[d] * wd;
+        skinPos[3 * v + 1] = X[a + 1] * wa + X[b + 1] * wb + X[c + 1] * wc + X[d + 1] * wd;
+        skinPos[3 * v + 2] = X[a + 2] * wa + X[b + 2] * wb + X[c + 2] * wc + X[d + 2] * wd;
+      }
+      p.posAttr.needsUpdate = true;
+      p.geo.computeVertexNormals();
     }
-    posAttr.needsUpdate = true;
-    geo.computeVertexNormals();
   }
 
-  let needRender = true;
   function placeCamera() {
     const d = cam.fit * cam.zoom, s = Math.sin(cam.pol);
     camera.position.set(target.x + d * s * Math.sin(cam.az), target.y + d * Math.cos(cam.pol), target.z + d * s * Math.cos(cam.az));
@@ -688,12 +809,12 @@ input[type="range"]::-moz-range-thumb {
   let last = performance.now(), acc = 0, frameNo = 0, lastTouch = last;
   function frame(now) {
     acc += Math.min(50, now - last); last = now;
-    if (asleep) acc = 0;
+    if (asleep || !N) acc = 0;
     let n = 0;
     while (acc >= 1000 / 120 && n < 3) { step(1 / 120); acc -= 1000 / 120; n++; }
     if (n === 3) acc = 0;
     if (frameNo++ % 30 === 0) readColors();
-    paintFace(ptrs.size && [...ptrs.values()].some(p => p.mode !== 'orbit') ? 'held' : now - lastTouch > 9000 ? 'asleep' : 'awake');
+    if (mode === 'toy') paintFace([...ptrs.values()].some(p => p.mode !== 'orbit') ? 'held' : now - lastTouch > 9000 ? 'asleep' : 'awake');
     if (n) { skin(); needRender = true; }
     for (const p of ptrs.values()) if (p.mesh) { p.mesh.position.copy(p.c); p.mesh.scale.setScalar(fingerR()); }
     if (needRender || faceTex.needsUpdate) { renderer.render(scene, camera); needRender = false; }
@@ -707,38 +828,72 @@ input[type="range"]::-moz-range-thumb {
     ndc.set((e.clientX - r.left) / r.width * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     ray.setFromCamera(ndc, camera);
   };
-  const orbiters = () => [...ptrs.values()].filter(p => p.mode === 'orbit');
+  const hitClay = () => ray.intersectObjects(W.pieces.map(p => p.mesh), false)[0];
+  const say = text => { const h = $('hint'); h.textContent = text; h.classList.remove('gone'); };
+
+  // where a new bit of clay would land under the pointer: on top of clay, or on the board
+  function landing(r) {
+    const hit = hitClay();
+    if (hit) return new T3.Vector3(hit.point.x, hit.point.y + r * .85, hit.point.z);
+    const t = -ray.ray.origin.y / ray.ray.direction.y;
+    if (!(t > 0)) return null;
+    const q = ray.ray.at(t, new T3.Vector3());
+    if (q.x * q.x + q.z * q.z > (BOARD - r) * (BOARD - r)) return null;
+    q.y = r * .8;
+    return q;
+  }
+  function extendStroke(p, q) {
+    if (p.path.length >= 90 || q.distanceTo(p.path[p.path.length - 1]) < p.r * .5) return;
+    p.path.push(q);
+    const m = new T3.Mesh(ballGeo, shadeMats[shade]); m.position.copy(q); m.scale.setScalar(p.r); m.castShadow = true;
+    p.preview.add(m); needRender = true;
+  }
+  function finishStroke(p) {
+    scene.remove(p.preview);
+    if (N > MAXN) { say('The board is full. Undo or clear to add more clay.'); return; }
+    const made = buildPiece(strokeField(p.path, p.r), shadeMats[shade]);
+    if (!made) say('The board is full. Undo or clear to add more clay.');
+    wake();
+  }
 
   cv.addEventListener('pointerdown', e => {
     e.preventDefault();
     try { cv.setPointerCapture(e.pointerId); } catch (_) {}
     setRay(e);
-    const hit = ray.intersectObject(guy)[0];
     const p = { mode: 'orbit', sx: e.clientX, sy: e.clientY, c: new T3.Vector3() };
-    if (hit) {
-      const R = fingerR(), nrm = hit.face.normal;
-      p.mode = tool;
-      if (tool === 'pull') {
-        p.c.copy(hit.point);
-        p.plane = new T3.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(tmpV).clone(), hit.point);
-        p.grabs = [];
-        for (let i = 0; i < N; i++) {
-          const ox = X[3 * i] - hit.point.x, oy = X[3 * i + 1] - hit.point.y, oz = X[3 * i + 2] - hit.point.z, d2 = ox * ox + oy * oy + oz * oz;
-          if (d2 < R * R) { const w = 1 - d2 / (R * R); p.grabs.push({ i, w: w * w, ox, oy, oz }); }
-        }
-      } else if (tool === 'press') {
-        p.c.copy(hit.point).addScaledVector(nrm, R);
-        if (p.c.y < R + .014) p.c.y = R + .014;
-      } else {
-        p.c.copy(hit.point).addScaledVector(nrm, -R * .35);
-        p.plane = new T3.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(tmpV).clone(), p.c);
-      }
-      if (tool !== 'pull') { p.mesh = new T3.Mesh(fingerGeo, fingerMat); p.mesh.position.copy(p.c); p.mesh.scale.setScalar(R); scene.add(p.mesh); }
-      cv.classList.add('holding');
-    }
-    ptrs.set(e.pointerId, p);
-    lastTouch = performance.now(); resetT = 0; wake();
     $('hint').classList.add('gone');
+    if (tool === 'add') {
+      const r = strokeR(), q = landing(r);
+      if (q) {
+        p.mode = 'add'; p.r = r; p.path = [q]; p.preview = new T3.Group(); scene.add(p.preview);
+        const m = new T3.Mesh(ballGeo, shadeMats[shade]); m.position.copy(q); m.scale.setScalar(r); m.castShadow = true; p.preview.add(m);
+      }
+    } else {
+      const hit = hitClay();
+      if (hit) {
+        const R = fingerR(), nrm = hit.face.normal;
+        p.mode = tool;
+        if (tool === 'pull') {
+          p.c.copy(hit.point);
+          p.plane = new T3.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(tmpV).clone(), hit.point);
+          p.grabs = [];
+          for (let i = 0; i < N; i++) {
+            const ox = X[3 * i] - hit.point.x, oy = X[3 * i + 1] - hit.point.y, oz = X[3 * i + 2] - hit.point.z, d2 = ox * ox + oy * oy + oz * oz;
+            if (d2 < R * R) { const w = 1 - d2 / (R * R); p.grabs.push({ i, w: w * w, ox, oy, oz }); }
+          }
+        } else if (tool === 'press') {
+          p.c.copy(hit.point).addScaledVector(nrm, R);
+          if (p.c.y < R + .014) p.c.y = R + .014;
+        } else {
+          p.c.copy(hit.point).addScaledVector(nrm, -R * .35);
+          p.plane = new T3.Plane().setFromNormalAndCoplanarPoint(camera.getWorldDirection(tmpV).clone(), p.c);
+        }
+        if (tool !== 'pull') { p.mesh = new T3.Mesh(ballGeo, fingerMat); p.mesh.position.copy(p.c); p.mesh.scale.setScalar(R); scene.add(p.mesh); }
+      }
+    }
+    if (p.mode !== 'orbit') cv.classList.add('holding');
+    ptrs.set(e.pointerId, p);
+    lastTouch = performance.now(); resetT = 0; wake(); needRender = true;
     $('panel').hidden = true; $('tune-btn').setAttribute('aria-expanded', 'false');
   });
   cv.addEventListener('pointermove', e => {
@@ -746,7 +901,7 @@ input[type="range"]::-moz-range-thumb {
     if (!p) return;
     lastTouch = performance.now();
     if (p.mode === 'orbit') {
-      const others = orbiters().filter(q => q !== p);
+      const others = [...ptrs.values()].filter(q => q.mode === 'orbit' && q !== p);
       if (others.length) {                              // two fingers on the background: zoom
         const o = others[0], before = Math.hypot(p.sx - o.sx, p.sy - o.sy), after = Math.hypot(e.clientX - o.sx, e.clientY - o.sy);
         if (before > 1) cam.zoom = Math.min(1.9, Math.max(.5, cam.zoom * before / after));
@@ -758,7 +913,9 @@ input[type="range"]::-moz-range-thumb {
       placeCamera();
       return;
     }
-    setRay(e); wake();
+    setRay(e);
+    if (p.mode === 'add') { const q = landing(p.r); if (q) extendStroke(p, q); return; }
+    wake();
     if (p.mode === 'press') {
       const t = (p.c.y - ray.ray.origin.y) / ray.ray.direction.y;
       if (t > 0) { p.c.x = ray.ray.origin.x + ray.ray.direction.x * t; p.c.z = ray.ray.origin.z + ray.ray.direction.z * t; }
@@ -767,15 +924,17 @@ input[type="range"]::-moz-range-thumb {
       if (p.c.y < 0) p.c.y = 0; else if (p.c.y > 1.1) p.c.y = 1.1;
     }
   });
-  const up = e => {
-    const p = ptrs.get(e.pointerId);
-    if (p && p.mesh) scene.remove(p.mesh);
-    ptrs.delete(e.pointerId);
+  function release(id, cancelled) {
+    const p = ptrs.get(id);
+    if (!p) return;
+    ptrs.delete(id);
+    if (p.mesh) scene.remove(p.mesh);
+    if (p.mode === 'add') { if (cancelled) scene.remove(p.preview); else finishStroke(p); }
     lastTouch = performance.now(); needRender = true;
     if (![...ptrs.values()].some(q => q.mode !== 'orbit')) cv.classList.remove('holding');
-  };
-  cv.addEventListener('pointerup', up);
-  cv.addEventListener('pointercancel', up);
+  }
+  cv.addEventListener('pointerup', e => release(e.pointerId, false));
+  cv.addEventListener('pointercancel', e => release(e.pointerId, true));
   cv.addEventListener('contextmenu', e => e.preventDefault());
   cv.addEventListener('wheel', e => {
     e.preventDefault();
@@ -785,12 +944,44 @@ input[type="range"]::-moz-range-thumb {
 
   // ---------- controls ----------
   function setTool(t) {
+    if (t === 'add' && mode !== 'create') return;
     tool = t;
     for (const b of document.querySelectorAll('.tools button')) b.setAttribute('aria-checked', String(b.dataset.tool === t));
+    cv.style.cursor = t === 'add' ? 'crosshair' : '';
   }
   for (const b of document.querySelectorAll('.tools button')) b.addEventListener('click', () => setTool(b.dataset.tool));
 
-  function reset() { lastTouch = performance.now(); resetT = 110; wake(); cam.az = .35; cam.pol = .78; cam.zoom = 1; placeCamera(); }
+  function setMode(m) {
+    if (m === mode) return;
+    for (const id of [...ptrs.keys()]) release(id, true);
+    saveCounts();
+    for (const p of W.pieces) scene.remove(p.mesh);
+    mode = m; useWorld(worlds[m]);
+    for (const p of W.pieces) scene.add(p.mesh);
+    const create = m === 'create';
+    document.body.classList.toggle('create', create);
+    for (const b of document.querySelectorAll('.modes button')) b.setAttribute('aria-checked', String(b.dataset.mode === m));
+    $('tool-add').hidden = !create; $('palette').hidden = !create; $('clay-btn').hidden = create;
+    $('reset-btn').textContent = create ? 'Clear' : 'Reset';
+    setTool(create ? 'add' : 'pull');
+    say(create ? 'Drag on the board to lay down clay. Pieces stick where they touch.' : 'Drag the guy to shape him. Drag the background to look around.');
+    resetT = 0; wake(); needRender = true;
+  }
+  for (const b of document.querySelectorAll('.modes button')) b.addEventListener('click', () => setMode(b.dataset.mode));
+
+  for (const b of document.querySelectorAll('.swatch')) b.addEventListener('click', () => {
+    shade = +b.dataset.shade;
+    for (const s of document.querySelectorAll('.swatch')) s.setAttribute('aria-pressed', String(s === b));
+  });
+  $('undo-btn').addEventListener('click', () => { if (W.pieces.length) dropPiecesFrom(W.pieces.length - 1); });
+
+  function reset() {
+    lastTouch = performance.now();
+    cam.az = .35; cam.pol = .78; cam.zoom = 1; placeCamera();
+    if (mode === 'create') { dropPiecesFrom(0); $('hint').classList.add('gone'); return; }
+    while (W.wa.length) unweld(W.wa.length - 1);
+    resetT = 110; wake();
+  }
   $('reset-btn').addEventListener('click', reset);
 
   $('tune-btn').addEventListener('click', () => {
@@ -804,7 +995,8 @@ input[type="range"]::-moz-range-thumb {
   }
   $('mesh-btn').addEventListener('click', () => {
     P.mesh = !P.mesh; $('mesh-btn').setAttribute('aria-pressed', String(P.mesh));
-    clay.wireframe = P.mesh; needRender = true;
+    for (const m of allMats) m.wireframe = P.mesh;
+    needRender = true;
   });
   $('clay-btn').addEventListener('click', () => {
     P.dark = !P.dark; $('clay-btn').setAttribute('aria-pressed', String(P.dark));
@@ -819,12 +1011,13 @@ input[type="range"]::-moz-range-thumb {
     if (e.target instanceof HTMLInputElement || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if (k === '1') setTool('pull'); else if (k === '2') setTool('press'); else if (k === '3') setTool('pinch');
+    else if (k === 'a') setTool('add'); else if (k === 'z' && mode === 'create') $('undo-btn').click();
     else if (k === 'r') reset();
   });
 
   window.addEventListener('resize', resize);
   resize(); readColors();
-  window.plasticGuy = { stats: () => { let top = 0; for (let i = 1; i < 3 * N; i += 3) if (X[i] > top) top = X[i]; return { nodes: N, edges: E, tets: NT, skin: SV, top, asleep, moved: lastMoved }; } };
+  window.plasticGuy = { stats: () => { let top = 0; for (let i = 1; i < 3 * N; i += 3) if (X[i] > top) top = X[i]; return { mode, pieces: W.pieces.length, nodes: N, edges: E, tets: NT, welds: W.wa.length, top, asleep, moved: lastMoved }; } };
   requestAnimationFrame(frame);
 })();
 </script>

@@ -9,7 +9,7 @@
 <style>
 /* Layout: one full-bleed 3D stage. The guy lies on a round board in the middle; controls sit in the corners. */
 :root {
-  --bg: #ffffff;
+  --bg: #f4f4f2;
   --fg: #0b0b0b;
   --mute: rgba(11, 11, 11, .5);
   --line: rgba(11, 11, 11, .16);
@@ -167,12 +167,12 @@ input[type="range"]::-moz-range-thumb {
 </style>
 </head>
 <body>
-<canvas id="stage" aria-label="A clay figure lying on a board. Drag it to deform it; drag the background to look around."></canvas>
+<canvas id="stage" aria-label="A rubbery figure lying on the floor. Drag it to deform it; drag the background to look around."></canvas>
 
 <header class="top">
   <div class="left">
     <h1 class="mark">plastic guy</h1>
-    <div class="seg modes" role="radiogroup" aria-label="Mode">
+    <div class="seg modes" role="radiogroup" aria-label="Mode" hidden>
       <button type="button" role="radio" aria-checked="true" data-mode="toy" id="mode-toy">Toy</button>
       <button type="button" role="radio" aria-checked="false" data-mode="create" id="mode-create">Create</button>
     </div>
@@ -195,18 +195,18 @@ input[type="range"]::-moz-range-thumb {
     <div class="ends"><span>clay</span><span>rubber</span></div>
   </div>
   <div class="row">
-    <label for="slide">Slide</label><output id="slide-out" for="slide">30</output>
-    <input id="slide" type="range" min="0" max="100" value="30">
+    <label for="slide">Slide</label><output id="slide-out" for="slide">25</output>
+    <input id="slide" type="range" min="0" max="100" value="25">
     <div class="ends"><span>sticky</span><span>slippery</span></div>
   </div>
   <div class="row">
-    <label for="finger">Finger size</label><output id="finger-out" for="finger">40</output>
-    <input id="finger" type="range" min="0" max="100" value="40">
+    <label for="finger">Finger size</label><output id="finger-out" for="finger">50</output>
+    <input id="finger" type="range" min="0" max="100" value="50">
     <div class="ends"><span>fingertip</span><span>whole palm</span></div>
   </div>
   <div class="switches">
     <button id="mesh-btn" type="button" aria-pressed="false">Mesh</button>
-    <button id="clay-btn" type="button" aria-pressed="false">Dark clay</button>
+    <button id="clay-btn" type="button" aria-pressed="false">Dark guy</button>
   </div>
   <div class="switches">
     <button id="invert-btn" type="button">Invert room</button>
@@ -239,10 +239,10 @@ input[type="range"]::-moz-range-thumb {
   const T3 = window.THREE;
 
   // ---------- settings ----------
-  const P = { soft: .4, mem: .1, slide: .3, finger: .4, mesh: false, dark: false };
+  const P = { soft: .4, mem: .1, slide: .25, finger: .5, mesh: false, dark: false };
   let mode = 'toy', tool = 'pull', shade = 0;
   const H = .028;                       // spacing of the simulation lattice
-  const ITER = 4, YIELD = .08, RMIN = .3, RMAX = 3.5;
+  const ITER = 5, YIELD = .12, RMIN = .3, RMAX = 3.5;
   const GRAV = 6 / (120 * 120), DC = H * .85, BOARD = .93;
   const WELD = DC * 1.03, WELD_BREAK = WELD * 2.4;       // clay sticks on contact, tears off if yanked
   const CAPN = 12000, CAPE = 80000, CAPT = 56000, MAXN = 9000;
@@ -410,7 +410,7 @@ input[type="range"]::-moz-range-thumb {
     }
 
     // ---- skin ----
-    const c = .0085, min = [f.min[0] - 2 * c, f.min[1] - 2 * c, f.min[2] - 2 * c];
+    const c = .011, min = [f.min[0] - 2 * c, f.min[1] - 2 * c, f.min[2] - 2 * c];
     const nx = Math.ceil((f.max[0] - min[0]) / c) + 3, ny = Math.ceil((f.max[1] - min[1]) / c) + 3, nz = Math.ceil((f.max[2] - min[2]) / c) + 3;
     const val = new Float32Array(nx * ny * nz);
     for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++)
@@ -462,9 +462,17 @@ input[type="range"]::-moz-range-thumb {
       if (sdf(mx + nx_ / l * e, my + ny_ / l * e, mz + nz_ / l * e) < sdf(mx - nx_ / l * e, my - ny_ / l * e, mz - nz_ / l * e))
         for (let t = 0; t < skinIdx.length; t += 3) { const s = skinIdx[t + 1]; skinIdx[t + 1] = skinIdx[t + 2]; skinIdx[t + 2] = s; }
     }
-    // top-down projection for the painted face and the surface grain
-    const skinUV = new Float32Array(SV * 2);
-    for (let v = 0; v < SV; v++) { skinUV[2 * v] = (pos[3 * v] + .55) / 1.1; skinUV[2 * v + 1] = 1 - (pos[3 * v + 2] + .55) / 1.1; }
+    // neighbour lists, so the skin can be relaxed every frame and never shows the lattice underneath
+    const nbSets = Array.from({ length: SV }, () => new Set());
+    for (let t = 0; t < skinIdx.length; t += 3) {
+      const a = skinIdx[t], b = skinIdx[t + 1], d = skinIdx[t + 2];
+      nbSets[a].add(b).add(d); nbSets[b].add(a).add(d); nbSets[d].add(a).add(b);
+    }
+    const nbStart = new Uint32Array(SV + 1); let nbTotal = 0;
+    for (let v = 0; v < SV; v++) { nbStart[v] = nbTotal; nbTotal += nbSets[v].size; }
+    nbStart[SV] = nbTotal;
+    const nbList = new Uint32Array(nbTotal);
+    for (let v = 0, n = 0; v < SV; v++) for (const u of nbSets[v]) nbList[n++] = u;
     // bind every skin vertex to the tet that holds it best
     const bindN = new Uint32Array(SV * 4), bindW = new Float32Array(SV * 4);
     const w = [0, 0, 0, 0], minVol = H * H * H / 6 * .05;
@@ -492,16 +500,33 @@ input[type="range"]::-moz-range-thumb {
     const geo = new T3.BufferGeometry();
     const posAttr = new T3.BufferAttribute(skinPos, 3); posAttr.setUsage(T3.DynamicDrawUsage);
     geo.setAttribute('position', posAttr);
-    geo.setAttribute('uv', new T3.BufferAttribute(skinUV, 2));
+    geo.setAttribute('rest', new T3.BufferAttribute(Float32Array.from(pos), 3));   // where each point started: the face is drawn in these coordinates
     geo.setIndex(new T3.BufferAttribute(skinIdx, 1));
-    geo.computeVertexNormals();
     geo.boundingSphere = new T3.Sphere(new T3.Vector3(), 6);
     const mesh = new T3.Mesh(geo, material);
-    mesh.castShadow = true; mesh.receiveShadow = true; mesh.frustumCulled = false;
-    const piece = { n0, e0, t0, SV, skinPos, bindN, bindW, geo, posAttr, mesh };
+    mesh.castShadow = true; mesh.frustumCulled = false;
+    const ink = new T3.Mesh(geo, outlineMat); ink.frustumCulled = false; ink.raycast = () => {};
+    mesh.add(ink);
+    const piece = { n0, e0, t0, SV, skinPos, tmp: new Float32Array(SV * 3), nbStart, nbList, bindN, bindW, geo, posAttr, mesh };
+    relax(piece); geo.computeVertexNormals();
     W.pieces.push(piece);
     scene.add(mesh);
     return piece;
+  }
+
+  // Taubin smoothing: irons out creases without shrinking thin limbs
+  function relaxPass(src, dst, f, p) {
+    const { SV, nbStart, nbList } = p;
+    for (let v = 0; v < SV; v++) {
+      let ax = 0, ay = 0, az = 0;
+      const s = nbStart[v], e = nbStart[v + 1];
+      for (let n = s; n < e; n++) { const u = 3 * nbList[n]; ax += src[u]; ay += src[u + 1]; az += src[u + 2]; }
+      const k = f / (e - s || 1), o = 3 * v;
+      dst[o] = src[o] + (ax * k - src[o] * f); dst[o + 1] = src[o + 1] + (ay * k - src[o + 1] * f); dst[o + 2] = src[o + 2] + (az * k - src[o + 2] * f);
+    }
+  }
+  function relax(p) {
+    for (let n = 0; n < 4; n++) { relaxPass(p.skinPos, p.tmp, .55, p); relaxPass(p.tmp, p.skinPos, -.58, p); }
   }
 
   function dropPiecesFrom(count) {            // remove the newest pieces down to `count`
@@ -550,7 +575,7 @@ input[type="range"]::-moz-range-thumb {
           if (ex * ex + ey * ey + ez * ez >= d2max) continue;
           pairs.push(i, j);
           const key = i * CAPN + j;
-          if (wcnt[i] < 4 && wcnt[j] < 4 && !wkey.has(key)) { wkey.add(key); wcnt[i]++; wcnt[j]++; W.wa.push(i); W.wb.push(j); }
+          if (mode === 'create' && wcnt[i] < 4 && wcnt[j] < 4 && !wkey.has(key)) { wkey.add(key); wcnt[i]++; wcnt[j]++; W.wa.push(i); W.wb.push(j); }
         }
       }
     }
@@ -559,7 +584,7 @@ input[type="range"]::-moz-range-thumb {
   function step(dtFinger) {
     const MAXV = .03;
     for (let o = 0; o < 3 * N; o += 3) {
-      let vx = (X[o] - PX[o]) * .99, vy = (X[o + 1] - PX[o + 1]) * .99 - GRAV, vz = (X[o + 2] - PX[o + 2]) * .99;
+      let vx = (X[o] - PX[o]) * .994, vy = (X[o + 1] - PX[o + 1]) * .994 - GRAV, vz = (X[o + 2] - PX[o + 2]) * .994;
       const v2 = vx * vx + vy * vy + vz * vz;
       if (v2 > MAXV * MAXV) { const k = MAXV / Math.sqrt(v2); vx *= k; vy *= k; vz *= k; }
       PX[o] = X[o]; PX[o + 1] = X[o + 1]; PX[o + 2] = X[o + 2];
@@ -581,6 +606,7 @@ input[type="range"]::-moz-range-thumb {
     }
 
     findPairs();
+    const grip = .35 + .65 * P.slide;
     const kE = 1 - .72 * P.soft, kV = .85 - .3 * P.soft, wa = W.wa, wb = W.wb;
     for (let it = 0; it < ITER; it++) {
       const fwd = !(it & 1);
@@ -649,6 +675,9 @@ input[type="range"]::-moz-range-thumb {
       }
       for (let o = 0; o < 3 * N; o += 3) {
         if (X[o + 1] < 0) X[o + 1] = 0;
+        if (X[o + 1] < .003) {                        // the floor grips: whatever touches it resists sliding
+          X[o] = PX[o] + (X[o] - PX[o]) * grip; X[o + 2] = PX[o + 2] + (X[o + 2] - PX[o + 2]) * grip;
+        }
         const r2 = X[o] * X[o] + X[o + 2] * X[o + 2];
         if (r2 > BOARD * BOARD) { const k = BOARD / Math.sqrt(r2); X[o] *= k; X[o + 2] *= k; }
       }
@@ -657,12 +686,12 @@ input[type="range"]::-moz-range-thumb {
     // the board grips whatever touches it
     const keep = .25 + .74 * P.slide;
     for (let o = 0; o < 3 * N; o += 3) {
-      if (X[o + 1] > 2e-4) continue;
+      if (X[o + 1] > .003) continue;
       PX[o] = X[o] - (X[o] - PX[o]) * keep; PX[o + 2] = X[o + 2] - (X[o + 2] - PX[o + 2]) * keep;
     }
 
     // clay remembers where you left it; rubber remembers where it started
-    const m = P.mem, rate = .1 * (1 - m), ret = .03 * m * m;
+    const m = P.mem, rate = .04 * (1 - m), ret = .03 * m * m;
     for (let e = 0; e < E; e++) {
       const a = 3 * ea[e], b = 3 * eb[e];
       const dx = X[b] - X[a], dy = X[b + 1] - X[a + 1], dz = X[b + 2] - X[a + 2];
@@ -704,8 +733,8 @@ input[type="range"]::-moz-range-thumb {
   const target = new T3.Vector3(0, .05, .02);
   let needRender = true;
 
-  scene.add(new T3.HemisphereLight(0xffffff, 0x8a8a8a, 1.15));
-  const key = new T3.DirectionalLight(0xffffff, 2.3);
+  scene.add(new T3.HemisphereLight(0xffffff, 0x8a8a8a, .55));
+  const key = new T3.DirectionalLight(0xffffff, 2.9);
   key.position.set(-1.1, 2.4, 1.0);
   key.castShadow = true;
   key.shadow.mapSize.set(2048, 2048);
@@ -713,49 +742,60 @@ input[type="range"]::-moz-range-thumb {
   key.shadow.bias = -.0004; key.shadow.normalBias = .004; key.shadow.radius = 5;
   scene.add(key);
 
-  const board = new T3.Mesh(new T3.CylinderGeometry(1, 1, .03, 128), new T3.MeshStandardMaterial({ roughness: 1 }));
-  board.position.y = -.015; board.receiveShadow = true;
-  scene.add(board);
+  // flat background: the floor only shows the shadow
+  const floor = new T3.Mesh(new T3.PlaneGeometry(40, 40).rotateX(-Math.PI / 2), new T3.ShadowMaterial({ opacity: .2 }));
+  floor.receiveShadow = true;
+  scene.add(floor);
 
-  // painted face + clay colour live in one texture so they stretch with the clay
-  const FS = 2048, faceCv = document.createElement('canvas'); faceCv.width = faceCv.height = FS;
-  const faceTex = new T3.CanvasTexture(faceCv); faceTex.colorSpace = T3.SRGBColorSpace; faceTex.anisotropy = 8;
-  const SHADES = ['#d8d7d2', '#7f7f7c', '#262626'];
-  let faceState = '';
-  function paintFace(state) {
-    const key_ = state + P.dark; if (key_ === faceState) return; faceState = key_;
-    const g = faceCv.getContext('2d'), u = FS / 1.1, tx = x => (x + .55) * u, tz = z => (z + .55) * u;
-    g.fillStyle = P.dark ? SHADES[2] : SHADES[0]; g.fillRect(0, 0, FS, FS);
-    const ink = P.dark ? '#f2f2f2' : '#111111';
-    g.fillStyle = ink; g.strokeStyle = ink; g.lineCap = 'round';
-    for (const ex of [-.04, .04]) {
-      g.beginPath();
-      if (state === 'asleep') { g.lineWidth = .008 * u; g.moveTo(tx(ex - .014), tz(-.358)); g.quadraticCurveTo(tx(ex), tz(-.35), tx(ex + .014), tz(-.358)); g.stroke(); }
-      else { g.arc(tx(ex), tz(-.36), (state === 'held' ? .017 : .0125) * u, 0, 6.2832); g.fill(); }
-    }
-    g.beginPath();
-    if (state === 'held') { g.arc(tx(0), tz(-.3), .015 * u, 0, 6.2832); g.fill(); }
-    else { g.lineWidth = .009 * u; g.moveTo(tx(-.03), tz(-.312)); g.quadraticCurveTo(tx(0), tz(-.282), tx(.03), tz(-.312)); g.stroke(); }
-    faceTex.needsUpdate = true;
-  }
-  // fine grain so the surface reads as clay, not plastic
-  const grainCv = document.createElement('canvas'); grainCv.width = grainCv.height = 256;
-  {
-    const g = grainCv.getContext('2d'), tmp = document.createElement('canvas');
-    g.fillStyle = '#808080'; g.fillRect(0, 0, 256, 256);
-    for (const [size, alpha] of [[32, .5], [64, .35], [128, .3], [256, .22]]) {
-      tmp.width = tmp.height = size;
-      const tg = tmp.getContext('2d'), im = tg.createImageData(size, size);
-      for (let i = 0; i < im.data.length; i += 4) { const v = Math.random() * 255; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 255; }
-      tg.putImageData(im, 0, 0);
-      g.globalAlpha = alpha; g.imageSmoothingEnabled = true; g.drawImage(tmp, 0, 0, 256, 256);
-    }
-  }
-  const grain = new T3.CanvasTexture(grainCv); grain.wrapS = grain.wrapT = T3.RepeatWrapping; grain.repeat.set(7, 7);
-
-  const guyMat = new T3.MeshStandardMaterial({ map: faceTex, bumpMap: grain, bumpScale: 1.4, roughness: .86, metalness: 0 });
-  const shadeMats = SHADES.map(c => new T3.MeshStandardMaterial({ color: c, bumpMap: grain, bumpScale: 1.4, roughness: .86, metalness: 0 }));
+  // cartoon look: three flat tones, an ink outline, and a face drawn by maths rather than pixels
+  const ramp = new T3.DataTexture(new Uint8Array([168, 168, 168, 255, 224, 224, 224, 255, 255, 255, 255, 255]), 3, 1);
+  ramp.minFilter = ramp.magFilter = T3.NearestFilter; ramp.needsUpdate = true;
+  const SHADES = ['#ffffff', '#9a9a98', '#2b2b2b'];
+  const faceU = { uFace: { value: 0 }, uInk: { value: new T3.Color('#111111') } };
+  const guyMat = new T3.MeshToonMaterial({ color: SHADES[0], gradientMap: ramp });
+  guyMat.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, faceU);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nattribute vec3 rest;\nvarying vec3 vRest;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRest = rest;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vRest; uniform float uFace; uniform vec3 uInk;
+        float sdSeg(vec2 p, vec2 a, vec2 b) { vec2 pa = p - a, ba = b - a; return length(pa - ba * clamp(dot(pa, ba) / dot(ba, ba), 0., 1.)); }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        {
+          vec2 p = vRest.xz;
+          vec2 e = vec2(abs(p.x) - .04, p.y + .36);
+          float d;
+          if (uFace > 1.5) d = sdSeg(e, vec2(-.014, 0.), vec2(.014, 0.)) - .004;                 // asleep
+          else d = length(e) - (uFace > .5 ? .017 : .0125);
+          if (uFace > .5 && uFace < 1.5) d = min(d, length(p - vec2(0., -.3)) - .015);          // held: "o"
+          else {
+            float arc = max(abs(length(p - vec2(0., -.3345)) - .0375) - .0045, -.312 - p.y);    // smile
+            d = min(d, min(arc, length(vec2(abs(p.x) - .03, p.y + .312)) - .0045));
+          }
+          float aa = max(fwidth(d), 1e-5);
+          float m = (1. - smoothstep(-aa, aa, d)) * step(.12, vRest.y);
+          diffuseColor.rgb = mix(diffuseColor.rgb, uInk, m);
+        }`);
+  };
+  const shadeMats = SHADES.map(c => new T3.MeshToonMaterial({ color: c, gradientMap: ramp }));
+  const outlineMat = new T3.MeshBasicMaterial({ color: '#111111', side: T3.BackSide });
+  outlineMat.onBeforeCompile = sh => {
+    sh.vertexShader = sh.vertexShader.replace('#include <begin_vertex>', 'vec3 transformed = position + normalize(normal) * .0055;');
+  };
   const allMats = [guyMat, ...shadeMats];
+  function paintFace(state) {
+    faceU.uFace.value = state === 'held' ? 1 : state === 'asleep' ? 2 : 0;
+  }
+  let lastFace = '';
+  function applyClay() {
+    guyMat.color.set(P.dark ? SHADES[2] : SHADES[0]);
+    faceU.uInk.value.set(P.dark ? '#f4f4f4' : '#111111');
+    const darkRoom = readColors.dark;
+    outlineMat.color.set(P.dark && darkRoom ? '#f4f4f4' : '#111111');
+    needRender = true;
+  }
 
   buildPiece(guyField, guyMat);
   saveCounts();
@@ -774,6 +814,7 @@ input[type="range"]::-moz-range-thumb {
         skinPos[3 * v + 1] = X[a + 1] * wa + X[b + 1] * wb + X[c + 1] * wc + X[d + 1] * wd;
         skinPos[3 * v + 2] = X[a + 2] * wa + X[b + 2] * wb + X[c + 2] * wc + X[d + 2] * wd;
       }
+      relax(p);
       p.posAttr.needsUpdate = true;
       p.geo.computeVertexNormals();
     }
@@ -787,12 +828,13 @@ input[type="range"]::-moz-range-thumb {
   }
   function readColors() {
     const cs = getComputedStyle(document.documentElement);
-    const bg = cs.getPropertyValue('--bg').trim() || '#fff', disc = cs.getPropertyValue('--disc').trim() || '#fff';
-    if (readColors.last === bg + disc) return;
-    readColors.last = bg + disc;
-    renderer.setClearColor(new T3.Color(bg), 1);
-    board.material.color.set(disc);
-    needRender = true;
+    const bg = cs.getPropertyValue('--bg').trim() || '#fff';
+    if (readColors.last === bg) return;
+    readColors.last = bg;
+    const col = new T3.Color(bg);
+    readColors.dark = col.r + col.g + col.b < 1.5;
+    renderer.setClearColor(col, 1);
+    applyClay();
   }
   function resize() {
     const w = window.innerWidth, h = window.innerHeight;
@@ -814,10 +856,13 @@ input[type="range"]::-moz-range-thumb {
     while (acc >= 1000 / 120 && n < 3) { step(1 / 120); acc -= 1000 / 120; n++; }
     if (n === 3) acc = 0;
     if (frameNo++ % 30 === 0) readColors();
-    if (mode === 'toy') paintFace([...ptrs.values()].some(p => p.mode !== 'orbit') ? 'held' : now - lastTouch > 9000 ? 'asleep' : 'awake');
+    if (mode === 'toy') {
+      const f = [...ptrs.values()].some(p => p.mode !== 'orbit') ? 'held' : now - lastTouch > 9000 ? 'asleep' : 'awake';
+      if (f !== lastFace) { lastFace = f; paintFace(f); needRender = true; }
+    }
     if (n) { skin(); needRender = true; }
     for (const p of ptrs.values()) if (p.mesh) { p.mesh.position.copy(p.c); p.mesh.scale.setScalar(fingerR()); }
-    if (needRender || faceTex.needsUpdate) { renderer.render(scene, camera); needRender = false; }
+    if (needRender) { renderer.render(scene, camera); needRender = false; }
     requestAnimationFrame(frame);
   }
 
@@ -1000,6 +1045,7 @@ input[type="range"]::-moz-range-thumb {
   });
   $('clay-btn').addEventListener('click', () => {
     P.dark = !P.dark; $('clay-btn').setAttribute('aria-pressed', String(P.dark));
+    applyClay();
   });
   $('invert-btn').addEventListener('click', () => {
     const root = document.documentElement;
